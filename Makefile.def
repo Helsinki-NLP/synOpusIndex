@@ -335,4 +335,4 @@ SENTALIGN  = ${UPLUG} align/hun
 ## always load generic makefile for submitting hpc-jobs
 ## TODO: is it good to do that here?
 
-include ${OPUSCORPORA}/Makefile.submit
+# include ${OPUSCORPORA}/Makefile.submit
