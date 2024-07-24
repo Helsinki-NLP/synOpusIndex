@@ -23,7 +23,8 @@ cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_bitexts ON bitexts ( corpus, 
 cur.execute("""CREATE TABLE IF NOT EXISTS links ( bitextID, srcIDs TEXT, trgIDs TEXT, alignType TEXT,
                                                 alignerScore REAL, cleanerScore REAL)""")
 cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_links ON links ( bitextID, srcIDs, trgIDs )")
-cur.execute("CREATE INDEX IF NOT EXISTS idx_aligntype ON links ( alignType )")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_aligntype ON links ( bitextID, alignType )")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_bitextid ON links ( bitextID )")
 
 
 ## create a view that joins the bitexts and links tables
