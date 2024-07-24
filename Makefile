@@ -2,6 +2,9 @@
 # de-duplicate and index sentences in OPUS
 #---------------------------------------------------------------------
 #
+# for moving the sentindex table into the sentence DB run:
+#   sqlite3 fi.idx.db ".dump sentindex" | sqlite3 fi.db
+#
 
 SHELL := bash
 
@@ -102,7 +105,7 @@ print-jsonl:
 
 SWIFT_PARAMS = --use-slo --segment-size 5G --changed --skip-identical
 
-STORAGE_FILES = ${LANGUAGE}.dedup.gz ${LANGUAGE}.db ${LANGUAGE}.idx.gz ${LANGUAGE}.idx.db
+STORAGE_FILES = ${LANGUAGE}.dedup.gz ${LANGUAGE}.db ${LANGUAGE}.idx.gz ${LANGUAGE}.idx.db ${LANGPAIR}.db
 
 .PHONY: upload
 upload:
@@ -133,8 +136,6 @@ index.txt:
 		sed 's#^#https://object.pouta.csc.fi/OPUS-index/#' >> $@
 	${LOAD_STORAGE_ENV} && swift list OPUS-index | grep '\.idx.gz$$'   | \
 		sed 's#^#https://object.pouta.csc.fi/OPUS-index/#' >> $@
-	${LOAD_STORAGE_ENV} && swift list OPUS-index | grep '\.idx.db$$'   | \
-		sed 's#^#https://object.pouta.csc.fi/OPUS-index/#' >> $@
 
 
 index-filesize.txt:
@@ -142,7 +143,7 @@ index-filesize.txt:
 	${LOAD_STORAGE_ENV} && rclone ls allas:OPUS-index | grep  '\.dedup.gz$$'  > $@
 	${LOAD_STORAGE_ENV} && rclone ls allas:OPUS-index | grep  '\.db$$'       >> $@
 	${LOAD_STORAGE_ENV} && rclone ls allas:OPUS-index | grep  '\.idx.gz$$'   >> $@
-	${LOAD_STORAGE_ENV} && rclone ls allas:OPUS-index | grep  '\.idx.db$$'   >> $@
+
 
 
 
@@ -211,29 +212,126 @@ ${LANGUAGE}.dedup.gz: ${ALL_MONO_DONE}
 ${LANGUAGE}.db: ${LANGUAGE}.dedup.gz
 	${MAKE} STORED_FILE=$@ retrieve
 	${GZIP} -cd < $< | ./sent2sqlite.py ${INDEX_TMPDIR}/$@
+	rsync ${INDEX_TMPDIR}/$@ $@
 
 
 ## sqlite database of all alignments
 
 ${LANGPAIR}.db: ${ALL_ALG_DONE}
 	mv -f ${INDEX_TMPDIR}/$@ $@
+	echo "CREATE TABLE IF NOT EXISTS aligned_corpora ( corpus TEXT, version TEXT)" | sqlite3 $@
+	echo "CREATE UNIQUE INDEX idx_aligned_corpora ON aligned_corpora ( corpus, version )" | sqlite3 $@
+	echo "INSERT OR IGNORE INTO aligned_corpora SELECT DISTINCT corpus,version FROM bitexts" | sqlite3 $@
+
 
 ${INDEX_TMPDIR}/${LANGPAIR}.db:
 	${MAKE} STORED_FILE=${LANGPAIR}.db retrieve
-	if [ ! -e $@ ]; then \
-	  echo "CREATE TABLE IF NOT EXISTS alignments ( corpus TEXT, version TEXT, fromDoc TEXT, toDoc TEXT, srcIDs TEXT, trgIDs TEXT, alignType TEXT, alignScore REAL, hunScore REAL, timeOverlap REAL, bicleanerScore REAL)" | sqlite3 $@; \
-	  echo "CREATE INDEX idx_location ON alignments ( corpus, version, fromDoc, toDoc, alignType)" | sqlite3 $@; \
+	@if [ ! -e $@ ]; then \
+	  echo "CREATE TABLE IF NOT EXISTS bitexts ( corpus TEXT, version TEXT, fromDoc TEXT, toDoc TEXT )" | sqlite3 $@; \
+	  echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_bitexts ON bitexts ( corpus, version, fromDoc, toDoc )" | sqlite3 $@; \
+	  echo "CREATE TABLE IF NOT EXISTS links ( bitextID, srcIDs TEXT, trgIDs TEXT, alignType TEXT, \
+			alignerScore REAL, cleanerScore REAL)" | sqlite3 $@; \
+	  echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_links ON links ( bitextID, srcIDs, trgIDs )" | sqlite3 $@; \
+	  echo "CREATE INDEX IF NOT EXISTS idx_aligntype ON links ( alignType )" | sqlite3 $@; \
 	fi
 
 ${ALL_ALG_DONE}: ${INDEX_TMPDIR}/${LANGPAIR}.db
 	@echo "processing $(@:.done=.xml.gz)"
 	@wget -qq -O - $(patsubst done/%.done,${STORAGE_BASE}%.xml.gz,$@) \
 	| gzip -cd \
-	| ./alg2csv.py \
-	| sed 's/^/$(word 2,$(subst /, ,$@)),$(word 3,$(subst /, ,$@)),/' \
-	| sqlite3 $< ".import /dev/stdin alignments --csv"
+	| ./alg2sqlite.py $< $(word 2,$(subst /, ,$@)) $(word 3,$(subst /, ,$@))
 	@mkdir -p $(dir $@)
 	@touch $@
+
+
+
+
+
+# ${LANGPAIR}.db: ${ALL_ALG_DONE}
+# 	mv -f ${INDEX_TMPDIR}/$@ $@
+# 	echo "CREATE TABLE IF NOT EXISTS aligned_corpora ( corpus TEXT, version TEXT)" | sqlite3 $@
+# 	echo "CREATE UNIQUE INDEX idx_aligned_corpora ON aligned_corpora ( corpus, version )" | sqlite3 $@
+# 	echo "INSERT OR IGNORE INTO aligned_corpora AS SELECT DISTINCT corpus,version FROM alignments" | sqlite3 $@
+
+
+# ALIGNMENT_VIEW = CREATE VIEW alignments (corpus, version, \
+# 					fromDoc, toDoc, \
+# 					srcIDs, trgIDs, \
+# 					alignType, alignScore, hunScore, timeOverlap, bicleanerScore) \
+# 		AS SELECT corpus, version, fromDoc, toDoc, srcIDs, trgIDs, \
+# 			alignType, alignScore, hunScore, timeOverlap, bicleanerScore \
+# 		FROM links \
+# 		INNER JOIN bitexts ON bitexts.rowid = links.alignDocID
+
+# ALIGNMENT_INSERT_TRIGGER = CREATE TRIGGER insert_alignment \
+# 		INSTEAD OF INSERT ON alignments \
+# 		BEGIN \
+# 			INSERT OR IGNORE INTO bitexts(corpus,version,fromDoc,toDoc) \
+# 			VALUES (NEW.corpus,NEW.version,NEW.fromDoc,NEW.toDoc); \
+# 			INSERT INTO links(alignDocID, srcIDs, trgIDs, \
+# 				alignType, alignScore, hunScore, timeOverlap, bicleanerScore) \
+# 			VALUES ( ( SELECT rowid FROM bitexts \
+# 					WHERE corpus=NEW.corpus AND version=NEW.version \
+# 				  	AND fromDoc=NEW.fromDoc AND toDoc=NEW.toDoc ), \
+# 				NEW.srcIDs,NEW.trgIDs,\
+# 				NEW.alignType, NEW.alignScore, NEW.hunScore, NEW.timeOverlap, NEW.bicleanerScore); \
+# 		END
+
+
+
+
+# ${LANGPAIR}-new.db:
+# 	echo "CREATE TABLE IF NOT EXISTS bitexts ( corpus TEXT, version TEXT, fromDoc TEXT, toDoc TEXT )" | sqlite3 $@
+# 	echo "CREATE UNIQUE INDEX idx_bitexts ON bitexts ( corpus, version, fromDoc, toDoc )" | sqlite3 $@
+# 	echo "CREATE TABLE IF NOT EXISTS links ( alignDocID, srcIDs TEXT, trgIDs TEXT, alignType TEXT, alignScore REAL, hunScore REAL, timeOverlap REAL, bicleanerScore REAL)" | sqlite3 $@
+# 	echo "CREATE UNIQUE INDEX idx_links ON links ( alignDocID, srcIDs, trgIDs )" | sqlite3 $@
+# 	echo "${ALIGNMENT_VIEW}" | sqlite3 $@
+# 	echo "${ALIGNMENT_INSERT_TRIGGER}" | sqlite3 $@
+# 	sqlite3 ${LANGPAIR}.db ".dump alignments" | sqlite3 $@ >/dev/null 2>/dev/null
+
+
+# # VARIANT 1: one table for documents and one for links
+# #            (makes things very complicated because we need two joins with the same document table
+# #             to retrieve fromDoc and toDoc - that makes the insert trigger very difficult)
+# #
+# #	echo "CREATE TABLE IF NOT EXISTS documents ( corpus TEXT, version TEXT, document TEXT )" | sqlite3 $@
+# #	echo "CREATE UNIQUE INDEX idx_documents ON documents ( corpus, version, document )" | sqlite3 $@
+# #	echo "CREATE TABLE IF NOT EXISTS links ( fromDocID, toDocID, srcIDs TEXT, trgIDs TEXT, alignType TEXT, alignScore REAL, hunScore REAL, timeOverlap REAL, bicleanerScore REAL)" | sqlite3 $@
+# #	echo "CREATE UNIQUE INDEX idx_links ON links ( fromDocID, toDocID, srcIDs, trgIDs )" | sqlite3 $@
+# #	echo "CREATE VIEW alignments (corpus, version, \
+# 					fromDoc, toDoc, \
+# 					srcIDs, trgIDs, \
+# 					alignType, alignScore, hunScore, timeOverlap, bicleanerScore) \
+# 		AS SELECT doc1.corpus as corpus, doc1.version as version, \
+# 			doc1.document as fromDoc, \
+# 			doc2.document as toDoc, \
+# 			srcIDs, trgIDs, \
+# 			alignType, alignScore, hunScore, timeOverlap, bicleanerScore \
+# 		FROM links \
+# 		INNER JOIN documents doc1 \
+# 			ON doc1.rowID = links.fromDocID \
+# 		INNER JOIN documents doc2 \
+# 			ON doc2.rowid = links.toDocID"
+
+
+
+# ${INDEX_TMPDIR}/${LANGPAIR}.db:
+# 	${MAKE} STORED_FILE=${LANGPAIR}.db retrieve
+# 	if [ ! -e $@ ]; then \
+# 	  echo "CREATE TABLE IF NOT EXISTS alignments ( corpus TEXT, version TEXT, fromDoc TEXT, toDoc TEXT, srcIDs TEXT, trgIDs TEXT, alignType TEXT, alignScore REAL, hunScore REAL, timeOverlap REAL, bicleanerScore REAL)" | sqlite3 $@; \
+# 	  echo "CREATE INDEX idx_all ON alignments ( corpus, version, fromDoc, toDoc, alignType)" | sqlite3 $@; \
+# 	  echo "CREATE INDEX idx_corpus ON alignments ( corpus, version )" | sqlite3 $@; \
+# 	fi
+
+# ${ALL_ALG_DONE}: ${INDEX_TMPDIR}/${LANGPAIR}.db
+# 	@echo "processing $(@:.done=.xml.gz)"
+# 	@wget -qq -O - $(patsubst done/%.done,${STORAGE_BASE}%.xml.gz,$@) \
+# 	| gzip -cd \
+# 	| ./alg2csv.py \
+# 	| sed 's/^/$(word 2,$(subst /, ,$@)),$(word 3,$(subst /, ,$@)),/' \
+# 	| sqlite3 $< ".import /dev/stdin alignments --csv"
+# 	@mkdir -p $(dir $@)
+# 	@touch $@
 
 
 
@@ -242,10 +340,12 @@ ${ALL_ALG_DONE}: ${INDEX_TMPDIR}/${LANGPAIR}.db
 sentence-index: ${LANGUAGE}.idx.gz
 
 ${LANGUAGE}.idx.db: ${LANGUAGE}.idx.gz
+	mkdir -p ${INDEX_TMPDIR}
 	${MAKE} STORED_FILE=$@ retrieve
 	echo "CREATE TABLE IF NOT EXISTS sentindex ( id, corpus, version, document, parID, sentID, length)" \
 	| sqlite3 ${INDEX_TMPDIR}/$@
-	echo "create index idx_location on sentindex (corpus,version,document,sentID);" | sqlite3 ${INDEX_TMPDIR}/$@
+	echo "create index idx_all on sentindex (corpus,version,document,sentID);" | sqlite3 ${INDEX_TMPDIR}/$@
+	echo "create index idx_corpus on sentindex (corpus,version);" | sqlite3 ${INDEX_TMPDIR}/$@
 	${GZIP} -cd < $< | tr "\t" ',' | sqlite3  ${INDEX_TMPDIR}/$@ ".import /dev/stdin sentindex --csv"
 	rsync ${INDEX_TMPDIR}/$@ $@
 
@@ -253,6 +353,7 @@ ${LANGUAGE}.idx.db: ${LANGUAGE}.idx.gz
 ## merge index files into the existing list
 
 ${LANGUAGE}.idx.gz: ${ALL_MONO_IDXDONE}
+	mkdir -p ${INDEX_TMPDIR}
 	${MAKE} STORED_FILE=$@ retrieve
 	if [ -e ${INDEX_TMPDIR}/$@ ]; then \
 	  find ${INDEX_TMPDIR} -name '*.idx' | xargs cat <(${GZIP} -cd ${INDEX_TMPDIR}/$@) | ${GZIP} -c > $@; \
@@ -263,6 +364,7 @@ ${LANGUAGE}.idx.gz: ${ALL_MONO_IDXDONE}
 
 
 ${TMP_SENTENCE_DB}:
+	mkdir -p $(dir $@)
 	rsync ${LANGUAGE}.db $@
 
 ${INDEX_TMPDIR}/%.idx: ${TMP_SENTENCE_DB}
@@ -316,6 +418,10 @@ ${INDEX_TMPDIR}/%.dedup:
 	    cat $@ | ./sent2sqlite.py $(notdir $(@:.dedup=.db)); \
 	  fi \
 	fi
+
+en.dedup.fixed.gz: en.dedup.gz
+	${GZIP} -cd < $< | ${FIX_UNICODE} | ${GZIP} -c > $@
+#	${GZIP} -cd < $< | ${FIX_UNICODE} | ${SORT} -u  | ${GZIP} -c > $@
 
 done/%.done: ${INDEX_TMPDIR}/%.dedup
 	mkdir -p $(dir $@)

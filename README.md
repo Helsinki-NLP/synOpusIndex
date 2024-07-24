@@ -1,3 +1,14 @@
+
+
+
+# SQLite indeces
+
+## Performance tuning
+
+* https://phiresky.github.io/blog/2020/sqlite-performance-tuning/
+* attach another database: https://www.sqlite.org/lang_attach.html
+* save query result in new table: https://stackoverflow.com/questions/57134793/how-to-save-query-results-to-a-new-sqlite
+
 # Monolingual sentence indeces
 
 Get all sentences for a given language, de-duplicate and then create an index over all sorted sentences.
