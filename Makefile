@@ -108,6 +108,16 @@ jsonl: ${LANGUAGE}.jsonl.gz
 print-jsonl:
 	@echo "${ALL_MONO_JSONLDONE}" | tr ' ' "\n"
 
+
+# LANGUAGES = ar ca cs de en es et fi fo fr ga he hr lt lv nb nn no pt_br pt se sk sl sr sv sw uk zh_cn zh zh_tw
+LANGUAGES = ar ca cs de es et fi fo fr ga he hr lt lv nb nn no pt_br pt se sk sl sr sv sw uk zh_cn zh zh_tw
+
+FTS5_DBS = $(patsubst %,%.fts5.db,${LANGUAGES})
+
+all-fts5: ${FTS5_DBS}
+
+
+
 ## in case the flags for finishing sentence extraction
 ## and we don't want to re-run all deduplication for all corpora
 ## --> run this temporary target to create all flags for all corpora
@@ -233,9 +243,27 @@ ${LANGUAGE}.db: ${LANGUAGE}.dedup.gz
 	rsync ${INDEX_TMPDIR}/$@ $@
 	echo "PRAGMA journal_mode=WAL" | sqlite3 $@
 
-${LANGUAGE}.fts5.db: ${LANGUAGE}.db
-	echo "CREATE VIRTUAL TABLE IF NOT EXISTS text USING FTS5(sentence)" | sqlite3 $@
-	echo "ATTACH DATABASE $< as org;INSERT OR IGNORE INTO text SELECT * FROM org.sentences;" | sqlite3 $@
+
+## create a full-text search database from the sentence DB
+## TODO: fts5 DB should depend on sentence DB,
+##       but we don't want to redo dedup.gz and the sentence DB if not needed
+
+# %.fts5.db: %.db
+# ${LANGUAGE}.fts5.db: ${LANGUAGE}.db
+#	${MAKE} STORED_FILE=$@ retrieve
+#	echo "CREATE VIRTUAL TABLE IF NOT EXISTS sentences USING FTS5(sentence)" | sqlite3 ${INDEX_TMPDIR}/$@
+#	echo "ATTACH DATABASE '$<' as org;INSERT OR IGNORE INTO sentences SELECT * FROM org.sentences;" | sqlite3 $@
+#	rsync ${INDEX_TMPDIR}/$@ $@
+
+## fts DB without dependence
+
+
+%.fts5.db:
+	${MAKE} STORED_FILE=$@ retrieve
+	echo "CREATE VIRTUAL TABLE IF NOT EXISTS sentences USING FTS5(sentence)" | sqlite3 ${INDEX_TMPDIR}/$@
+	echo "ATTACH DATABASE '$(@:.fts5.db=.db)' as org;INSERT OR IGNORE INTO sentences SELECT * FROM org.sentences;" | sqlite3 ${INDEX_TMPDIR}/$@
+	rsync ${INDEX_TMPDIR}/$@ $@
+
 
 
 ## sqlite database of all alignments
