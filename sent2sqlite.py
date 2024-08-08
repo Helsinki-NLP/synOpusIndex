@@ -12,18 +12,39 @@ buffer = []
 buffersize = 100000
 bufferCount = 0
 
-for line in sys.stdin:
-    buffer.append(tuple([line.rstrip()]))
-    if len(buffer) >= buffersize:
-        cur.executemany("""INSERT OR IGNORE INTO sentences VALUES(?)""", buffer)
-        con.commit()
-        buffer = []
+while True:
+    try:
+        line = sys.stdin.readline()
+        if line == '':
+            break
+        buffer.append(tuple([line.rstrip()]))
+        if len(buffer) >= buffersize:
+            cur.executemany("""INSERT OR IGNORE INTO sentences VALUES(?)""", buffer)
+            con.commit()
+            buffer = []
         
-        bufferCount += 1
-        sys.stderr.write('.')
-        if not bufferCount % 100:
-            sys.stderr.write(f" {bufferCount} * {buffersize}\n")
+            bufferCount += 1
+            sys.stderr.write('.')
+            if not bufferCount % 100:
+                sys.stderr.write(f" {bufferCount} * {buffersize}\n")
+            sys.stderr.flush()
+    except:
+        sys.stderr.write("Something wrong with the input. Ignore this line.\n")
         sys.stderr.flush()
+        
+
+# for line in sys.stdin:
+#     buffer.append(tuple([line.rstrip()]))
+#     if len(buffer) >= buffersize:
+#         cur.executemany("""INSERT OR IGNORE INTO sentences VALUES(?)""", buffer)
+#         con.commit()
+#         buffer = []
+        
+#         bufferCount += 1
+#         sys.stderr.write('.')
+#         if not bufferCount % 100:
+#             sys.stderr.write(f" {bufferCount} * {buffersize}\n")
+#         sys.stderr.flush()
 
 
 

@@ -5,8 +5,10 @@
 
 ## Performance tuning
 
+* should use FTS5 for storing sentences (https://www.sqlitetutorial.net/sqlite-full-text-search/)
 * https://phiresky.github.io/blog/2020/sqlite-performance-tuning/
 * attach another database: https://www.sqlite.org/lang_attach.html
+
 
 ## Links
 

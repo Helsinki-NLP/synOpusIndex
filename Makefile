@@ -68,6 +68,9 @@ ALL_ALG_URLS      := $(patsubst %,https:%,$(shell find ${OPUSRELEASE}/ -name sta
 ALL_ALG_DONE      := $(patsubst ${STORAGE_BASE}%.xml.gz,done/%.done,${ALL_ALG_URLS})
 
 
+.PRECIOUS: 	${LANGUAGE}.db ${LANGUAGE}.ids.db ${LANGUAGE}.idx.db ${LANGPAIR}.db \
+		${LANGUAGE}.idx.gz ${LANGUAGE}.dedup.gz 
+
 ## intermediate files that can be deleted after finishing up
 
 .INTERMEDIATE: ${ALL_MONO_DEDUP}
@@ -105,9 +108,20 @@ jsonl: ${LANGUAGE}.jsonl.gz
 print-jsonl:
 	@echo "${ALL_MONO_JSONLDONE}" | tr ' ' "\n"
 
+## in case the flags for finishing sentence extraction
+## and we don't want to re-run all deduplication for all corpora
+## --> run this temporary target to create all flags for all corpora
+## --> WARNING: now you don't know whether things have been done
+
+tmp-dedup-fix:
+	touch ${ALL_MONO_DONE}
+	touch ${LANGUAGE}.dedup.gz
+
+
 SWIFT_PARAMS = --use-slo --segment-size 5G --changed --skip-identical
 
-STORAGE_FILES = ${LANGUAGE}.dedup.gz ${LANGUAGE}.db ${LANGUAGE}.idx.gz ${LANGUAGE}.idx.db ${LANGPAIR}.db
+# STORAGE_FILES = ${LANGUAGE}.dedup.gz ${LANGUAGE}.db ${LANGUAGE}.idx.gz ${LANGUAGE}.idx.db ${LANGPAIR}.db
+STORAGE_FILES = ${LANGUAGE}.dedup.gz ${LANGUAGE}.db ${LANGUAGE}.ids.db ${LANGPAIR}.db
 
 .PHONY: upload
 upload:
@@ -209,12 +223,19 @@ ${LANGUAGE}.dedup.gz: ${ALL_MONO_DONE}
 	mv -f ${INDEX_TMPDIR}/$(notdir $@) $@
 
 
+
+
 ## sqlite database of all sentences
 
 ${LANGUAGE}.db: ${LANGUAGE}.dedup.gz
 	${MAKE} STORED_FILE=$@ retrieve
 	${GZIP} -cd < $< | ./sent2sqlite.py ${INDEX_TMPDIR}/$@
 	rsync ${INDEX_TMPDIR}/$@ $@
+	echo "PRAGMA journal_mode=WAL" | sqlite3 $@
+
+${LANGUAGE}.fts5.db: ${LANGUAGE}.db
+	echo "CREATE VIRTUAL TABLE IF NOT EXISTS text USING FTS5(sentence)" | sqlite3 $@
+	echo "ATTACH DATABASE $< as org;INSERT OR IGNORE INTO text SELECT * FROM org.sentences;" | sqlite3 $@
 
 
 ## sqlite database of all alignments
@@ -224,6 +245,7 @@ ${LANGPAIR}.db: ${ALL_ALG_DONE}
 	echo "CREATE TABLE IF NOT EXISTS aligned_corpora ( corpus TEXT, version TEXT)" | sqlite3 $@
 	echo "CREATE UNIQUE INDEX idx_aligned_corpora ON aligned_corpora ( corpus, version )" | sqlite3 $@
 	echo "INSERT OR IGNORE INTO aligned_corpora SELECT DISTINCT corpus,version FROM bitexts" | sqlite3 $@
+
 
 
 ${INDEX_TMPDIR}/${LANGPAIR}.db:
@@ -438,6 +460,9 @@ en.dedup.fixed.gz: en.dedup.gz
 
 en.dedup.missing.fixed.gz: en.dedup.missing.gz
 	${GZIP} -cd < $< | ${FIX_UNICODE} | ${GZIP} -c > $@
+
+en.dedup.all.gz:
+	zcat en.dedup.done.gz en.dedup.missing.fixed.gz | ${GZIP} -c > $@
 
 
 ${ALL_MONO_DONE}: done/%.done: ${INDEX_TMPDIR}/%.dedup
