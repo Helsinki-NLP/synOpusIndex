@@ -68,6 +68,13 @@ ALL_ALG_URLS      := $(patsubst %,https:%,$(shell find ${OPUSRELEASE}/ -name sta
 ALL_ALG_DONE      := $(patsubst ${STORAGE_BASE}%.xml.gz,done/%.done,${ALL_ALG_URLS})
 
 
+
+## directory with scripts and tools
+
+SCRIPTDIR = scripts/
+
+
+
 .PRECIOUS: 	${LANGUAGE}.db ${LANGUAGE}.ids.db ${LANGUAGE}.idx.db ${LANGPAIR}.db \
 		${LANGUAGE}.idx.gz ${LANGUAGE}.dedup.gz 
 
@@ -228,12 +235,12 @@ ${LANGUAGE}.dedup.gz: ${ALL_MONO_DONE}
 
 %.sent2id.db: %.dedup.gz
 	mkdir -p ${INDEX_TMPDIR}
-	${GZIP} -cd $< | ./add2mcdb.pl ${INDEX_TMPDIR}/$(notdir $@)
+	${GZIP} -cd $< | ${SCRIPTDIR}add2mcdb.pl ${INDEX_TMPDIR}/$(notdir $@)
 	mv -f ${INDEX_TMPDIR}/$(notdir $@) $@
 
 %.id2sent.db: %.dedup.gz
 	mkdir -p ${INDEX_TMPDIR}
-	${GZIP} -cd $< | ./add2index.pl ${INDEX_TMPDIR}/$(notdir $@)
+	${GZIP} -cd $< | ${SCRIPTDIR}add2index.pl ${INDEX_TMPDIR}/$(notdir $@)
 	mv -f ${INDEX_TMPDIR}/$(notdir $@) $@
 
 
@@ -243,7 +250,7 @@ ${LANGUAGE}.dedup.gz: ${ALL_MONO_DONE}
 
 ${LANGUAGE}.db: ${LANGUAGE}.dedup.gz
 	${MAKE} STORED_FILE=$@ retrieve
-	${GZIP} -cd < $< | ./sent2sqlite.py ${INDEX_TMPDIR}/$@
+	${GZIP} -cd < $< | ${SCRIPTDIR}sent2sqlite.py ${INDEX_TMPDIR}/$@
 	mv -f ${INDEX_TMPDIR}/$@ $@
 	echo "PRAGMA journal_mode=WAL" | sqlite3 $@
 
@@ -296,7 +303,7 @@ ${ALL_ALG_DONE}: ${INDEX_TMPDIR}/${LANGPAIR}.db
 	@echo "processing $(@:.done=.xml.gz)"
 	@wget -qq -O - $(patsubst done/%.done,${STORAGE_BASE}%.xml.gz,$@) \
 	| gzip -cd \
-	| ./alg2sqlite.py $< $(word 2,$(subst /, ,$@)) $(word 3,$(subst /, ,$@))
+	| ${SCRIPTDIR}alg2sqlite.py $< $(word 2,$(subst /, ,$@)) $(word 3,$(subst /, ,$@))
 	@mkdir -p $(dir $@)
 	@touch $@
 
@@ -324,7 +331,7 @@ ${ALL_ALG_DONE}: ${INDEX_TMPDIR}/${LANGPAIR}.db
 # 	@echo "processing $(@:.done=.xml.gz)"
 # 	@wget -qq -O - $(patsubst done/%.done,${STORAGE_BASE}%.xml.gz,$@) \
 # 	| gzip -cd \
-# 	| ./alg2csv.py \
+# 	| ${SCRIPTDIR}alg2csv.py \
 # 	| sed 's/^/$(word 2,$(subst /, ,$@)),$(word 3,$(subst /, ,$@)),/' \
 # 	| sqlite3 $< ".import /dev/stdin alignments --csv"
 # 	@mkdir -p $(dir $@)
@@ -367,7 +374,7 @@ ${INDEX_TMPDIR}/${LANGUAGE}.ids.db:
 
 ${ALL_MONO_IDSDONE}: ${INDEX_TMPDIR}/${LANGUAGE}.ids.db ${TMP_SENTENCE_DB}
 	@echo "process $@"
-	@./sentid2sqlite.py \
+	@${SCRIPTDIR}sentid2sqlite.py \
 		-i $< \
 		-c $(word 2,$(subst /, ,$@)) \
 		-r $(word 3,$(subst /, ,$@)) \
@@ -409,7 +416,7 @@ ${LANGUAGE}.idx.gz: ${ALL_MONO_IDXDONE}
 
 ${INDEX_TMPDIR}/%.idx: ${TMP_SENTENCE_DB}
 	mkdir -p ${dir $@}
-	./opus_sentid_index.py \
+	${SCRIPTDIR}opus_sentid_index.py \
 		-c $(word 1,$(subst /, ,$(patsubst ${INDEX_TMPDIR}/%.idx,%,$@))) \
 		-r $(word 2,$(subst /, ,$(patsubst ${INDEX_TMPDIR}/%.idx,%,$@))) \
 		-l ${LANGUAGE} \
@@ -472,11 +479,11 @@ ${LANGUAGE}.jsonl.gz: ${ALL_MONO_JSONLDONE}
 	fi
 
 
-#	./opus_get_documents.py -j -sp \
+#	${SCRIPTDIR}opus_get_documents.py -j -sp \
 
 ${INDEX_TMPDIR}/%.jsonl:
 	mkdir -p ${dir $@}
-	./opus_get_documents.py -j \
+	${SCRIPTDIR}opus_get_documents.py -j \
 		-c $(word 1,$(subst /, ,$(patsubst ${INDEX_TMPDIR}/%.jsonl,%,$@))) \
 		-r $(word 2,$(subst /, ,$(patsubst ${INDEX_TMPDIR}/%.jsonl,%,$@))) \
 		-l ${LANGUAGE} > $@
@@ -495,7 +502,7 @@ ${INDEX_TMPDIR}/%.dedup:
 	rm -f $@.txt.gz
 	if [ -e $(notdir $(@:.dedup=.db)) ]; then \
 	  if [ -s $@ ]; then \
-	    cat $@ | ./sent2sqlite.py $(notdir $(@:.dedup=.db)); \
+	    cat $@ | ${SCRIPTDIR}sent2sqlite.py $(notdir $(@:.dedup=.db)); \
 	  fi \
 	fi
 
@@ -547,31 +554,31 @@ ${INDEX_TMPDIR}/${STORED_FILE}:
 
 
 de.CCMatrix-v1.idx: de.sent2id.db
-	perl opus_sentid_index.pl -c CCMatrix -r v1 -l de -d $< > $@
+	${SCRIPTDIR}opus_sentid_index.pl -c CCMatrix -r v1 -l de -d $< > $@
 
 fi.OpenSubtitles-v2018.idx: fi.sent2id.db
-	perl opus_sentid_index.pl -c OpenSubtitles -r v2018 -l fi -d $< > $@
+	${SCRIPTDIR}opus_sentid_index.pl -c OpenSubtitles -r v2018 -l fi -d $< > $@
 
 sv.OpenSubtitles-v2018.idx: sv.sent2id.db
-	perl opus_sentid_index.pl -c OpenSubtitles -r v2018 -l sv -d $< > $@
+	${SCRIPTDIR}opus_sentid_index.pl -c OpenSubtitles -r v2018 -l sv -d $< > $@
 
 de.OpenSubtitles-v2018.idx: de.sent2id.db
-	perl opus_sentid_index.pl -c OpenSubtitles -r v2018 -l de -d $< > $@
+	${SCRIPTDIR}opus_sentid_index.pl -c OpenSubtitles -r v2018 -l de -d $< > $@
 
 fi.Europarl-v8.idx: fi.sent2id.db
-	perl opus_sentid_index.pl -c Europarl -r v8 -l fi -d $< > $@
+	${SCRIPTDIR}opus_sentid_index.pl -c Europarl -r v8 -l fi -d $< > $@
 
 sv.Europarl-v8.idx: sv.sent2id.db
-	perl opus_sentid_index.pl -c Europarl -r v8 -l sv -d $< > $@
+	${SCRIPTDIR}opus_sentid_index.pl -c Europarl -r v8 -l sv -d $< > $@
 
 
 sv.OpenSubtitles-v2018.idx2: sv.sent2id.db
 	cp $< ${LOCAL_SCRATCH}/$<
-	perl opus_sentid_index.pl -c OpenSubtitles -r v2018 -l sv -d ${LOCAL_SCRATCH}/$< > $@
+	${SCRIPTDIR}opus_sentid_index.pl -c OpenSubtitles -r v2018 -l sv -d ${LOCAL_SCRATCH}/$< > $@
 
 sv.OpenSubtitles-v2018.idx3:
 	cp sv.db ${LOCAL_SCRATCH}/sv.db
-	./opus_sentid_index.py -c OpenSubtitles -r v2018 -l sv -d ${LOCAL_SCRATCH}/sv.db > $@
+	${SCRIPTDIR}opus_sentid_index.py -c OpenSubtitles -r v2018 -l sv -d ${LOCAL_SCRATCH}/sv.db > $@
 
 
 # en.dedup.new.gz:
