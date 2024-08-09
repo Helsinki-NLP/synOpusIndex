@@ -286,6 +286,11 @@ ${LANGPAIR}.db: ${ALL_ALG_DONE}
 	echo "INSERT OR IGNORE INTO aligned_corpora SELECT DISTINCT corpus,version FROM bitexts" | sqlite3 $@
 
 
+linkdb: ${LANGPAIR}.linked.db
+
+${LANGPAIR}.linked.db:
+	${SCRIPTDIR}sentlinks.py ${LANGPAIR}.db ${SRCLANG}.ids.db ${TRGLANG}.ids.db $@
+
 
 ${INDEX_TMPDIR}/${LANGPAIR}.db:
 	${MAKE} STORED_FILE=${LANGPAIR}.db retrieve
