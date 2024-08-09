@@ -77,8 +77,8 @@ ALL_ALG_DONE      := $(patsubst ${STORAGE_BASE}%.xml.gz,done/%.done,${ALL_ALG_UR
 .INTERMEDIATE: ${ALL_MONO_IDX}
 .INTERMEDIATE: ${TMP_SENTENCE_DB}
 
-# FIX_UNICODE := 	perl -CS -pe 'tr[\x{9}\x{A}\x{D}\x{20}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}][]cd;'
-FIX_UNICODE := 	${PARALLEL} ftfy
+# FIX_UNICODE := perl -CS -pe 'tr[\x{9}\x{A}\x{D}\x{20}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}][]cd;'
+FIX_UNICODE := ${PARALLEL} ftfy
 
 
 .PHONY: all
@@ -101,6 +101,9 @@ counts: ${LANGUAGE}.counts
 
 .PHONY: dedup
 dedup: ${LANGUAGE}.dedup.gz
+
+.PHONY: sent2id
+sent2id: ${LANGUAGE}.sent2id.db
 
 .PHONY: jsonl
 jsonl: ${LANGUAGE}.jsonl.gz
@@ -175,7 +178,7 @@ index-filesize.txt:
 
 .PHONY: job-puhti
 job-puhti:
-	${MAKE} HPC_MEM=16g HPC_CORES=8 CORES=4 THREADS=4 HPC_DISK=1000 all.submit
+	${MAKE} HPC_MEM=16g HPC_CORES=8 CORES=4 THREADS=4 HPC_DISK=1000 all-mono.submit
 
 .PHONY: job-puhti
 dedup-job-puhti:
@@ -183,7 +186,7 @@ dedup-job-puhti:
 
 
 big-job-puhti:
-	${MAKE} HPC_MEM=32g HPC_CORES=16 CORES=8 THREADS=8 HPC_DISK=3000 all.submit
+	${MAKE} HPC_MEM=32g HPC_CORES=16 CORES=8 THREADS=8 HPC_DISK=3000 all-mono.submit
 
 
 
@@ -222,6 +225,7 @@ ${LANGUAGE}.dedup.gz: ${ALL_MONO_DONE}
 ## create MCDB index databases
 ## OBSOLETE?
 
+
 %.sent2id.db: %.dedup.gz
 	mkdir -p ${INDEX_TMPDIR}
 	${GZIP} -cd $< | ./add2mcdb.pl ${INDEX_TMPDIR}/$(notdir $@)
@@ -240,7 +244,7 @@ ${LANGUAGE}.dedup.gz: ${ALL_MONO_DONE}
 ${LANGUAGE}.db: ${LANGUAGE}.dedup.gz
 	${MAKE} STORED_FILE=$@ retrieve
 	${GZIP} -cd < $< | ./sent2sqlite.py ${INDEX_TMPDIR}/$@
-	rsync ${INDEX_TMPDIR}/$@ $@
+	mv -f ${INDEX_TMPDIR}/$@ $@
 	echo "PRAGMA journal_mode=WAL" | sqlite3 $@
 
 
@@ -253,7 +257,7 @@ ${LANGUAGE}.db: ${LANGUAGE}.dedup.gz
 #	${MAKE} STORED_FILE=$@ retrieve
 #	echo "CREATE VIRTUAL TABLE IF NOT EXISTS sentences USING FTS5(sentence)" | sqlite3 ${INDEX_TMPDIR}/$@
 #	echo "ATTACH DATABASE '$<' as org;INSERT OR IGNORE INTO sentences SELECT * FROM org.sentences;" | sqlite3 $@
-#	rsync ${INDEX_TMPDIR}/$@ $@
+#	mv -f ${INDEX_TMPDIR}/$@ $@
 
 ## fts DB without dependence
 
@@ -262,7 +266,7 @@ ${LANGUAGE}.db: ${LANGUAGE}.dedup.gz
 	${MAKE} STORED_FILE=$@ retrieve
 	echo "CREATE VIRTUAL TABLE IF NOT EXISTS sentences USING FTS5(sentence)" | sqlite3 ${INDEX_TMPDIR}/$@
 	echo "ATTACH DATABASE '$(@:.fts5.db=.db)' as org;INSERT OR IGNORE INTO sentences SELECT * FROM org.sentences;" | sqlite3 ${INDEX_TMPDIR}/$@
-	rsync ${INDEX_TMPDIR}/$@ $@
+	mv -f ${INDEX_TMPDIR}/$@ $@
 
 
 
@@ -338,8 +342,21 @@ ${TMP_SENTENCE_DB}:
 	rsync ${LANGUAGE}.db $@
 
 ${LANGUAGE}.ids.db: ${ALL_MONO_IDSDONE}
-	if [ -e ${TMP_SENTENCE_DB} ]; then rsync ${TMP_SENTENCE_DB} ${LANGUAGE}.db; fi
-	if [ -e ${INDEX_TMPDIR}/$@ ]; then rsync ${INDEX_TMPDIR}/$@ $@; fi
+	if [ -e ${TMP_SENTENCE_DB} ]; then mv -f ${TMP_SENTENCE_DB} ${LANGUAGE}.db; fi
+	if [ -e ${INDEX_TMPDIR}/$@ ]; then mv -f ${INDEX_TMPDIR}/$@ $@; fi
+
+
+
+SENTIDS_DBS = $(patsubst %.ids.db,%.sentids.db,$(wildcard *.ids.db))
+
+add-sentid-index: ${SENTIDS_DBS}
+
+%.sentids.db:
+	mkdir -p ${INDEX_TMPDIR}
+	cp $(@:.sentids.db=.ids.db) ${INDEX_TMPDIR}/$@
+	echo "CREATE INDEX idx_id ON sentids (id)" | sqlite3 ${INDEX_TMPDIR}/$@
+	mv -f ${INDEX_TMPDIR}/$@ $@
+
 
 ${INDEX_TMPDIR}/${LANGUAGE}.ids.db:
 	${MAKE} STORED_FILE=$(notdir $@) retrieve
