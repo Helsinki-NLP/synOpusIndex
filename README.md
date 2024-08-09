@@ -22,10 +22,11 @@ Optionally, one can also create a full-text-search index over sentences in yet a
 
 * Table `sentences`
 
+| column      | type                             |
 |-------------|----------------------------------|
 | rowid       | INTEGER UNIQUE                   |
 | sentence    | TEXT UNIQUE PRIMARY KEY NOT NULL |
-|-------------|----------------------------------|
+
 
 `rowid` is the automatically assigned row ID and will be used as unique key for each sentence.
 
@@ -35,23 +36,25 @@ Optionally, one can also create a full-text-search index over sentences in yet a
 
 * Table `document`:
 
+| column      | type           |
 |-------------|----------------|
 | rowid       | INTEGER UNIQUE |
 | corpus      | TEXT           |
 | version     | TEXT           |
 | document    | TEXT           |
-|-------------|----------------|
+
 
 Unique index over columns (corpus,version,document).
 `rowid` is used as a unique document ID.
 
 * Table `sentids`:
 
+| column      | type           |
 |-------------|----------------|
 | id          | INTEGER        |
 | docID       | INTEGER        |
 | sentID      | TEXT           |
-|-------------|----------------|
+
 
 Unique index over columns (docID,sentID). `docID` correspond to rowid's in the `documents` table. `sentID` is taken from original sentence IDs in XML documents in OPUS. `id` corresponds to rowid's in the `sentences` table in the sentence DB.
 
@@ -71,19 +74,21 @@ Sentence alignments are stored per language pair (source language `xx` and targe
 
 * Table `bitexts`:
 
+| column      | type           |
 |-------------|----------------|
 | rowid       | INTEGER UNIQUE |
 | corpus      | TEXT           |
 | version     | TEXT           |
 | fromDoc     | TEXT           |
 | toDoc       | TEXT           |
-|-------------|----------------|
+
 
 All information is directly taken from the XCES Align files in OPUS. `fromDoc` corresponds to the document name in the source language and `toDoc` to the aligned document in the target language. The automatically assigned `rowid` is, again, taken as a unique document ID (of this bitext). There is a unique index over columns (corpus, version, fromDoc, toDoc).
 
 
 * Table `links`:
 
+| column       | type           |
 |--------------|----------------|
 | rowid        | INTEGER UNIQUE |
 | bitextID     | INTEGER        |
@@ -92,7 +97,7 @@ All information is directly taken from the XCES Align files in OPUS. `fromDoc` c
 | alignType    | TEXT           |
 | alignerScore | REAL           |
 | cleanerScore | REAL           |
-|--------------|----------------|
+
 
 `bitextID` corresponds to `rowid` in table `bitexs`. `srcIDs` and `trgIDs` are strings that correspond to lists of sentence IDs in OPUS (that should match `sentID` in the `sentids` table in the corresponding sentence indeces of source and target language). The strings are directly taken from the XCES Align files in OPUS (`xtargets` argument in sentence links). `alignType` specifies the alignment type in terms of the number of source and target sentences. For example, `2-1` refers to an alignment of 2 sentences in the source language aligned to one sentence in the target language. `alignerScore` is also taken from the original OPUS alignment files and may correspond to different scores depending on the tool used for producing the original bitext. If there is no score it will be set to 0. `cleanerScore` is reserved for an additional score that may be produced by tools like bicleaner or OpusFilter.
 
