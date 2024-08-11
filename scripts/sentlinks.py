@@ -50,11 +50,9 @@ algDBcur = algDBcon.cursor()
 bitextDBcur = algDBcon.cursor()
 
 
-
 srcbuffer = []
 trgbuffer = []
 buffersize = 10000
-
 
 bitextID = 0
 corpusID = 0
@@ -63,6 +61,7 @@ toDocID = 0
 
 count = 0
 for row in algDBcur.execute("SELECT rowid,bitextID,srcIDs,trgIDs FROM links ORDER BY bitextID"):
+    
     count+=1
     if not count % 5000:
         sys.stderr.write('.')
@@ -70,8 +69,7 @@ for row in algDBcur.execute("SELECT rowid,bitextID,srcIDs,trgIDs FROM links ORDE
             sys.stderr.write(f" {count}\n")
         sys.stderr.flush()
 
-    if row[0] != bitextID:
-        linkID = row[0]
+    if row[1] != bitextID:
         bitextID = row[1]
         for bitext in bitextDBcur.execute(f"SELECT * FROM bitexts WHERE rowid={bitextID}"):
             corpus = bitext[0]
@@ -86,6 +84,7 @@ for row in algDBcur.execute("SELECT rowid,bitextID,srcIDs,trgIDs FROM links ORDE
             for doc in trgDBcur.execute(f"SELECT rowid FROM documents WHERE corpus='{corpus}' AND version='{version}' AND document='{toDoc}'"):
                 toDocID = doc[0]
 
+    linkID = row[0]
     srcIDs = row[2].split(' ')
     trgIDs = row[3].split(' ')
     

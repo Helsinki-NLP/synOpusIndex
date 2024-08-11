@@ -66,6 +66,7 @@ TRGLANG := $(lastword $(subst -, ,${LANGPAIR}))
 ALL_ALG_URLS      := $(patsubst %,https:%,$(shell find ${OPUSRELEASE}/ -name statistics.yaml | \
 			xargs grep 'xml/${LANGPAIR}.xml.gz' | cut -f4 -d:))
 ALL_ALG_DONE      := $(patsubst ${STORAGE_BASE}%.xml.gz,done/%.done,${ALL_ALG_URLS})
+ALL_LINKED_DONE   := $(patsubst %.done,%.linked.done,${ALL_ALG_DONE})
 
 
 
@@ -288,8 +289,23 @@ ${LANGPAIR}.db: ${ALL_ALG_DONE}
 
 linkdb: ${LANGPAIR}.linked.db
 
-${LANGPAIR}.linked.db:
-	${SCRIPTDIR}sentlinks.py ${LANGPAIR}.db ${SRCLANG}.ids.db ${TRGLANG}.ids.db $@
+# create link DB for all corpora: this is slow - better do it per corpus/version
+# with done-flags below (can be parallelized and easier to update with new data)
+#
+# ${LANGPAIR}.linked.db:
+# 	${SCRIPTDIR}sentlinks.py ${LANGPAIR}.db ${SRCLANG}.ids.db ${TRGLANG}.ids.db $@
+
+${LANGPAIR}.linked.db: ${ALL_LINKED_DONE}
+
+${ALL_LINKED_DONE}:
+	@echo "processing $(@:.done=.xml.gz)"
+	${SCRIPTDIR}corpuslinks.py \
+		${LANGPAIR}.db ${SRCLANG}.ids.db ${TRGLANG}.ids.db ${LANGPAIR}.linked.db \
+		$(word 2,$(subst /, ,$@)) $(word 3,$(subst /, ,$@))
+	@mkdir -p $(dir $@)
+	@touch $@
+
+
 
 
 ${INDEX_TMPDIR}/${LANGPAIR}.db:
