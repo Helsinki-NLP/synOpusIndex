@@ -104,6 +104,13 @@ all-mono: ${LANGUAGE}.counts
 all-links: ${LANGPAIR}.db
 
 
+linkdb-job:
+	${MAKE} HPC_CORES=8 THREADS=8 HPC_MEM=16g HPC_TIME=72:00 linkdb.submit
+
+linkdb: ${LANGPAIR}.linked.db
+
+
+
 .PHONY: counts
 counts: ${LANGUAGE}.counts
 
@@ -287,7 +294,6 @@ ${LANGPAIR}.db: ${ALL_ALG_DONE}
 	echo "INSERT OR IGNORE INTO aligned_corpora SELECT DISTINCT corpus,version FROM bitexts" | sqlite3 $@
 
 
-linkdb: ${LANGPAIR}.linked.db
 
 # create link DB for all corpora: this is slow - better do it per corpus/version
 # with done-flags below (can be parallelized and easier to update with new data)
