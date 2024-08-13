@@ -36,45 +36,15 @@ trgDBcur = trgDBcon.cursor()
 linksDBcon = sqlite3.connect(linkDB, timeout=7200)
 linksDBcur = linksDBcon.cursor()
 
-linksDBcur.execute("CREATE TABLE IF NOT EXISTS linkedsource ( sentID INTEGER, linkID INTEGER, bitextID INTEGER, corpusID INTEGER, PRIMARY KEY(linkID,sentID) )")
-linksDBcur.execute("CREATE TABLE IF NOT EXISTS linkedtarget ( sentID INTEGER, linkID INTEGER, bitextID INTEGER, corpusID INTEGER, PRIMARY KEY(linkID,sentID) )")
+linksDBcur.execute("CREATE TABLE IF NOT EXISTS linkedsource ( sentID INTEGER, linkID INTEGER, bitextID INTEGER, PRIMARY KEY(linkID,sentID) )")
+linksDBcur.execute("CREATE TABLE IF NOT EXISTS linkedtarget ( sentID INTEGER, linkID INTEGER, bitextID INTEGER, PRIMARY KEY(linkID,sentID) )")
 
-# linksDBcur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_linkedsource ON linkedsource (sentID,linkID)")
-# linksDBcur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_linkedtarget ON linkedtarget (sentID,linkID)")
-# linksDBcur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_linkedsource ON linkedsource (linkID,sentID)")
-# linksDBcur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_linkedtarget ON linkedtarget (linkID,sentID)")
-
-# linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_linkedsource_corpusid_sentid ON linkedsource (corpusID,sentID)")
-# linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_linkedtarget_corpusid_sentid ON linkedtarget (corpusID,sentID)")
-# linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_linkedsource_corpusid ON linkedsource (corpusID)")
-# linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_linkedtarget_corpusid ON linkedtarget (corpusID)")
-
-linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_linkedsource_bitext ON linkedsource (corpusID,bitextID,sentID)")
-linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_linkedtarget_bitext ON linkedtarget (corpusID,bitextID,sentID)")
-
+linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_linkedsource_bitext ON linkedsource (bitextID,sentID)")
+linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_linkedtarget_bitext ON linkedtarget (bitextID,sentID)")
 linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_linkedsource_linkid ON linkedsource (linkID)")
 linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_linkedtarget_linkid ON linkedtarget (linkID)")
 linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_linkedsource_sentid ON linkedsource (sentID)")
 linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_linkedtarget_sentid ON linkedtarget (sentID)")
-
-# linksDBcur.execute("CREATE TABLE IF NOT EXISTS linkedsentences ( linkID INTEGER NOT NULL PRIMARY KEY, srcIDs TEXT, trgIDs TEXT)")
-
-##----------------------------------------------------------------
-## create a new table of corpus names + versions
-## --> this is to enable searching the sentence links for specific corpora without complicated table queries
-##----------------------------------------------------------------
-
-linksDBcur.execute(f"ATTACH DATABASE '{algDB}' as alg")
-linksDBcur.execute("CREATE TABLE IF NOT EXISTS corpora ( corpus TEXT, version TEXT)")
-linksDBcur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_corpus ON corpora ( corpus, version)")
-linksDBcur.execute("INSERT OR IGNORE INTO corpora (corpus,version) SELECT DISTINCT corpus,version FROM alg.bitexts")
-linksDBcon.commit()
-linksDBcur.execute("DETACH DATABASE alg")
-
-corpusID = 0
-for resource in linksDBcur.execute(f"SELECT rowid FROM corpora WHERE corpus='{corpus}' AND version='{version}'"):
-    corpusID = resource[0]
-
 linksDBcur.close()
 
 ##----------------------------------------------------------------
@@ -98,11 +68,9 @@ def insert_links():
         linksDBcon = sqlite3.connect(linkDB, timeout=7200)
         linksDBcur = linksDBcon.cursor()
         if len(srcbuffer) > 0:
-            linksDBcur.executemany("""INSERT OR IGNORE INTO linkedsource VALUES(?,?,?,?)""", srcbuffer)
+            linksDBcur.executemany("""INSERT OR IGNORE INTO linkedsource VALUES(?,?,?)""", srcbuffer)
         if len(trgbuffer) > 0:
-            linksDBcur.executemany("""INSERT OR IGNORE INTO linkedtarget VALUES(?,?,?,?)""", trgbuffer)
-        # if len(linkbuffer) > 0:
-        #     linksDBcur.executemany("""INSERT OR IGNORE INTO linkedsentences VALUES(?,?,?)""", linkbuffer)
+            linksDBcur.executemany("""INSERT OR IGNORE INTO linkedtarget VALUES(?,?,?)""", trgbuffer)
         linksDBcon.commit()
         linksDBcur.close()
         srcbuffer = []
@@ -131,7 +99,6 @@ for bitext in bitextDBcur.execute(f"SELECT rowid,fromDoc,toDoc FROM bitexts WHER
         fromDocID = doc[0]
     for doc in trgDBcur.execute(f"SELECT rowid FROM documents WHERE corpus='{corpus}' AND version='{version}' AND document='{toDoc}'"):
         toDocID = doc[0]
-
     
     # run through alignments in this bitext
 
@@ -150,29 +117,20 @@ for bitext in bitextDBcur.execute(f"SELECT rowid,fromDoc,toDoc FROM bitexts WHER
         srcIDs = row[1].split(' ')
         trgIDs = row[2].split(' ')
 
-
         # get source and target sentence IDs from the sentence indeces
         # (search for the OPUS IDs in the sentence index DBs)
 
-        # srcSents = []
         for s in srcIDs:
             if (s):
                 for sent in srcDBcur.execute(f"SELECT id FROM sentids WHERE docID={fromDocID} AND sentID='{s}'"):
                     sentID = sent[0]
-                    # srcSents.append(str(sentID))
-                    srcbuffer.append(tuple([sentID,linkID,bitextID,corpusID]))
+                    srcbuffer.append(tuple([sentID,linkID,bitextID]))
 
-        # trgSents = []
         for t in trgIDs:
             if (t):
                 for sent in trgDBcur.execute(f"SELECT id FROM sentids WHERE docID={toDocID} AND sentID='{t}'"):
                     sentID = sent[0]
-                    # trgSents.append(str(sentID))
-                    trgbuffer.append(tuple([sentID,linkID,bitextID,corpusID]))
-
-        # srcSentIDs = ' '.join(srcSents)
-        # trgSentIDs = ' '.join(trgSents)
-        # linkbuffer.append(tuple([linkID,srcSentIDs,trgSentIDs]))
+                    trgbuffer.append(tuple([sentID,linkID,bitextID]))
 
         if len(srcbuffer) >= buffersize or len(trgbuffer) >= buffersize:
             insert_links()

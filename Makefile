@@ -21,9 +21,14 @@ LOAD_STORAGE_ENV := module load allas && allas-conf -k ${CSC_PROJECT}
 
 ## monolingual texts
 
-LANGUAGE ?= en
 
-INDEX_TMPDIR = ${TMPDIR}/index_tmp_${LANGUAGE}
+LANGPAIR ?= fi-sv
+SRCLANG  := $(firstword $(subst -, ,${LANGPAIR}))
+TRGLANG  := $(lastword $(subst -, ,${LANGPAIR}))
+LANGUAGE ?= ${SRCLANG}
+
+INDEX_TMPDIR := ${TMPDIR}/index_tmp_${LANGPAIR}
+
 
 ALL_MONO_URLS    := $(patsubst %,https:%,$(shell find ${OPUSRELEASE}/ -name statistics.yaml | \
 			xargs grep 'mono/${LANGUAGE}.txt.gz' | cut -f4 -d:))
@@ -59,15 +64,24 @@ TMP_SENTENCE_DB  := ${INDEX_TMPDIR}/${LANGUAGE}-sentences.db
 
 ## alignment files
 
-LANGPAIR ?= fi-sv
-SRCLANG := $(firstword $(subst -, ,${LANGPAIR}))
-TRGLANG := $(lastword $(subst -, ,${LANGPAIR}))
-
 ALL_ALG_URLS      := $(patsubst %,https:%,$(shell find ${OPUSRELEASE}/ -name statistics.yaml | \
 			xargs grep 'xml/${LANGPAIR}.xml.gz' | cut -f4 -d:))
 ALL_ALG_DONE      := $(patsubst ${STORAGE_BASE}%.xml.gz,done/%.done,${ALL_ALG_URLS})
-ALL_LINKED_DONE   := $(patsubst %.done,%.linked.done,${ALL_ALG_DONE})
+ALL_LINKED_DONE   := $(patsubst %.done,%.links.done,${ALL_ALG_DONE})
 
+
+ALL_ALG_DBS       := $(subst /xml/,/,$(patsubst done/%.done,sqlite/%.db,${ALL_ALG_DONE}))
+ALL_LINK_DBS      := $(subst /xml/,/,$(patsubst done/%.done,sqlite/%.linked.db,${ALL_ALG_DONE}))
+
+BITEXT_DB         := sqlite/${LANGPAIR}.bitexts.db
+ALG_DB            := sqlite/${LANGPAIR}.alg.db
+LINK_DB           := sqlite/${LANGPAIR}.linked.db
+
+.PRECIOUS: ${ALG_DB} ${LINK_DB}
+.NOTINTERMEDIATE: ${ALL_ALG_DBS} ${ALL_LINK_DBS}
+
+ALG_DB_MERGED     := $(patsubst %.db,%.merged,${ALL_LINK_DBS})
+LINK_DB_MERGED    := $(patsubst %.db,%.merged,${ALL_LINK_DBS})
 
 
 ## directory with scripts and tools
@@ -104,8 +118,19 @@ all-mono: ${LANGUAGE}.counts
 all-links: ${LANGPAIR}.db
 
 
+new-linkdb-job:
+	${MAKE} HPC_CORES=4 THREADS=4 HPC_MEM=16g HPC_TIME=72:00 HPC_DISK=1000 new-linkdb.submit
+
+new-linkdb: ${LINK_DB}
+
+
+
+
 linkdb-job:
-	${MAKE} HPC_CORES=8 THREADS=8 HPC_MEM=16g HPC_TIME=72:00 linkdb.submit
+	${MAKE} HPC_CORES=4 THREADS=4 HPC_MEM=16g HPC_TIME=72:00 HPC_DISK=1000 linkdb.submit
+
+linkdb-largelang-job:
+	${MAKE} HPC_CORES=4 THREADS=4 HPC_MEM=16g HPC_TIME=72:00 HPC_DISK=2000 linkdb.submit
 
 linkdb: ${LANGPAIR}.linked.db
 
@@ -267,17 +292,8 @@ ${LANGUAGE}.db: ${LANGUAGE}.dedup.gz
 ## TODO: fts5 DB should depend on sentence DB,
 ##       but we don't want to redo dedup.gz and the sentence DB if not needed
 
-# %.fts5.db: %.db
-# ${LANGUAGE}.fts5.db: ${LANGUAGE}.db
-#	${MAKE} STORED_FILE=$@ retrieve
-#	echo "CREATE VIRTUAL TABLE IF NOT EXISTS sentences USING FTS5(sentence)" | sqlite3 ${INDEX_TMPDIR}/$@
-#	echo "ATTACH DATABASE '$<' as org;INSERT OR IGNORE INTO sentences SELECT * FROM org.sentences;" | sqlite3 $@
-#	mv -f ${INDEX_TMPDIR}/$@ $@
 
-## fts DB without dependence
-
-
-%.fts5.db:
+%.fts5.db: %.db
 	${MAKE} STORED_FILE=$@ retrieve
 	echo "CREATE VIRTUAL TABLE IF NOT EXISTS sentences USING FTS5(sentence)" | sqlite3 ${INDEX_TMPDIR}/$@
 	echo "ATTACH DATABASE '$(@:.fts5.db=.db)' as org;INSERT OR IGNORE INTO sentences SELECT * FROM org.sentences;" | sqlite3 ${INDEX_TMPDIR}/$@
@@ -288,40 +304,29 @@ ${LANGUAGE}.db: ${LANGUAGE}.dedup.gz
 ## sqlite database of all alignments
 
 ${LANGPAIR}.db: ${ALL_ALG_DONE}
-	mv -f ${INDEX_TMPDIR}/$@ $@
-	echo "CREATE TABLE IF NOT EXISTS aligned_corpora ( corpus TEXT, version TEXT)" | sqlite3 $@
-	echo "CREATE UNIQUE INDEX idx_aligned_corpora ON aligned_corpora ( corpus, version )" | sqlite3 $@
-	echo "INSERT OR IGNORE INTO aligned_corpora SELECT DISTINCT corpus,version FROM bitexts" | sqlite3 $@
+	@if [ -e ${INDEX_TMPDIR}/$@ ]; then \
+	  mv -f ${INDEX_TMPDIR}/$@ $@; \
+	  echo "CREATE TABLE IF NOT EXISTS aligned_corpora ( corpus TEXT, version TEXT)" | sqlite3 $@; \
+	  echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_aligned_corpora ON aligned_corpora ( corpus, version )" \
+		| sqlite3 $@; \
+	  echo "INSERT OR IGNORE INTO aligned_corpora SELECT DISTINCT corpus,version FROM bitexts" \
+		| sqlite3 $@; \
+	fi
 
 
-
-# create link DB for all corpora: this is slow - better do it per corpus/version
-# with done-flags below (can be parallelized and easier to update with new data)
-#
-# ${LANGPAIR}.linked.db:
-# 	${SCRIPTDIR}sentlinks.py ${LANGPAIR}.db ${SRCLANG}.ids.db ${TRGLANG}.ids.db $@
-
-${LANGPAIR}.linked.db: ${ALL_LINKED_DONE}
-
-${ALL_LINKED_DONE}:
-	@echo "processing $(@:.done=.xml.gz)"
-	${SCRIPTDIR}corpuslinks.py \
-		${LANGPAIR}.db ${SRCLANG}.ids.db ${TRGLANG}.ids.db ${LANGPAIR}.linked.db \
-		$(word 2,$(subst /, ,$@)) $(word 3,$(subst /, ,$@))
-	@mkdir -p $(dir $@)
-	@touch $@
-
-
-
+.INTERMEDIATE: ${INDEX_TMPDIR}/${LANGPAIR}.db
 
 ${INDEX_TMPDIR}/${LANGPAIR}.db:
 	${MAKE} STORED_FILE=${LANGPAIR}.db retrieve
 	@if [ ! -e $@ ]; then \
-	  echo "CREATE TABLE IF NOT EXISTS bitexts ( corpus TEXT, version TEXT, fromDoc TEXT, toDoc TEXT )" | sqlite3 $@; \
-	  echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_bitexts ON bitexts ( corpus, version, fromDoc, toDoc )" | sqlite3 $@; \
+	  echo "CREATE TABLE IF NOT EXISTS bitexts ( corpus TEXT, version TEXT, fromDoc TEXT, toDoc TEXT )" \
+		| sqlite3 $@; \
+	  echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_bitexts ON bitexts ( corpus, version, fromDoc, toDoc )" \
+		| sqlite3 $@; \
 	  echo "CREATE TABLE IF NOT EXISTS links ( bitextID, srcIDs TEXT, trgIDs TEXT, alignType TEXT, \
 			alignerScore REAL, cleanerScore REAL)" | sqlite3 $@; \
-	  echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_links ON links ( bitextID, srcIDs, trgIDs )" | sqlite3 $@; \
+	  echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_links ON links ( bitextID, srcIDs, trgIDs )" \
+		| sqlite3 $@; \
 	  echo "CREATE INDEX IF NOT EXISTS idx_bitextid ON links ( bitextID )" | sqlite3 $@; \
 	  echo "CREATE INDEX IF NOT EXISTS idx_aligntype ON links ( bitextID, alignType )" | sqlite3 $@; \
 	fi
@@ -335,34 +340,93 @@ ${ALL_ALG_DONE}: ${INDEX_TMPDIR}/${LANGPAIR}.db
 	@touch $@
 
 
+##-----------------------------------------------------------
+## DB that maps internal sentence IDs to internal link IDs
+## --> this enables search over bitexts
+##-----------------------------------------------------------
 
-##------------------------------------------------------------
-## bitext index with just one table (may become quite big!)
-##------------------------------------------------------------
 
-# ${LANGPAIR}.db: ${ALL_ALG_DONE}
-# 	mv -f ${INDEX_TMPDIR}/$@ $@
-# 	echo "CREATE TABLE IF NOT EXISTS aligned_corpora ( corpus TEXT, version TEXT)" | sqlite3 $@
-# 	echo "CREATE UNIQUE INDEX idx_aligned_corpora ON aligned_corpora ( corpus, version )" | sqlite3 $@
-# 	echo "INSERT OR IGNORE INTO aligned_corpora AS SELECT DISTINCT corpus,version FROM alignments" | sqlite3 $@
-#
-# ${INDEX_TMPDIR}/${LANGPAIR}.db:
-# 	${MAKE} STORED_FILE=${LANGPAIR}.db retrieve
-# 	if [ ! -e $@ ]; then \
-# 	  echo "CREATE TABLE IF NOT EXISTS alignments ( corpus TEXT, version TEXT, fromDoc TEXT, toDoc TEXT, srcIDs TEXT, trgIDs TEXT, alignType TEXT, alignScore REAL, hunScore REAL, timeOverlap REAL, bicleanerScore REAL)" | sqlite3 $@; \
-# 	  echo "CREATE INDEX idx_all ON alignments ( corpus, version, fromDoc, toDoc, alignType)" | sqlite3 $@; \
-# 	  echo "CREATE INDEX idx_corpus ON alignments ( corpus, version )" | sqlite3 $@; \
-# 	fi
-#
-# ${ALL_ALG_DONE}: ${INDEX_TMPDIR}/${LANGPAIR}.db
-# 	@echo "processing $(@:.done=.xml.gz)"
-# 	@wget -qq -O - $(patsubst done/%.done,${STORAGE_BASE}%.xml.gz,$@) \
-# 	| gzip -cd \
-# 	| ${SCRIPTDIR}alg2csv.py \
-# 	| sed 's/^/$(word 2,$(subst /, ,$@)),$(word 3,$(subst /, ,$@)),/' \
-# 	| sqlite3 $< ".import /dev/stdin alignments --csv"
-# 	@mkdir -p $(dir $@)
-# 	@touch $@
+LINKDB_TMP_TARGET := ${INDEX_TMPDIR}/linkdb/${LANGPAIR}.linked.db
+
+${LANGPAIR}.linked.db: ${ALL_LINKED_DONE}
+	if [ -e ${LINKDB_TMP_TARGET} ]; then mv -f ${LINKDB_TMP_TARGET} $@; fi
+	-sqlite3 ${LANGPAIR}.db ".dump bitexts" | sqlite3 $@ >$@.out 2>$@.err
+	echo "CREATE TABLE IF NOT EXISTS bitexts ( corpus TEXT, version TEXT, fromDoc TEXT, toDoc TEXT )" \
+	| sqlite3 $@
+	echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_bitexts ON bitexts ( corpus, version, fromDoc, toDoc )" \
+	| sqlite3 $@
+
+
+## temporary files in locations with fast disk I/O
+
+LINKDB_PREREQUISITES := ${INDEX_TMPDIR}/linkdb/${LANGPAIR}.db \
+			${INDEX_TMPDIR}/linkdb/${SRCLANG}.ids.db \
+			${INDEX_TMPDIR}/linkdb/${TRGLANG}.ids.db
+
+.INTERMEDIATE: ${LINKDB_PREREQUISITES} ${LINKDB_TMP_TARGET}
+
+${LINKDB_PREREQUISITES}: ${INDEX_TMPDIR}/linkdb/%: %
+	mkdir -p $(dir $@)
+	rsync -av $< $@
+
+${LINKDB_TMP_TARGET}:
+	${MAKE} STORED_FILE=$(notdir $@) retrieve
+	mkdir -p $(dir $@)
+	if [ -e $(notdir $@) ]; then rsync -av $(notdir $@) $@; fi
+
+${ALL_LINKED_DONE}: ${LINKDB_PREREQUISITES} ${LINKDB_TMP_TARGET}
+	@echo "processing $(@:.done=.xml.gz)"
+	${SCRIPTDIR}corpuslinks.py \
+		${LINKDB_PREREQUISITES} \
+		${LINKDB_TMP_TARGET} \
+		$(word 2,$(subst /, ,$@)) \
+		$(word 3,$(subst /, ,$@))
+	@mkdir -p $(dir $@)
+	@touch $@
+
+
+
+##---------------------------------------------------------
+## NEW: individual link files for each corpus/version
+## --> better than one gigantic index files for all corpora
+##---------------------------------------------------------
+
+${ALL_LINK_DBS}: ${LINKDB_PREREQUISITES}
+	@mkdir -p $(dir $@)
+	${SCRIPTDIR}bitextlinks.py $^ $@ $(word 2,$(subst /, ,$@)) $(word 3,$(subst /, ,$@))
+
+# (2) merge all individual link DBs into one link DB for the current langpair
+
+${LINK_DB}: ${ALL_LINK_DBS} ${LINK_DB_MERGED}
+
+MODIFY_DB_DUMP = sed 's/CREATE TABLE/CREATE TABLE IF NOT EXISTS/;s/INSERT/INSERT OR IGNORE/;'
+
+${LINK_DB_MERGED}: %.merged: %.db
+	@echo "CREATE TABLE IF NOT EXISTS linkedsource ( sentID INTEGER, linkID INTEGER, bitextID INTEGER, PRIMARY KEY(linkID,sentID) )" | sqlite3 ${LINK_DB}
+	@echo "CREATE TABLE IF NOT EXISTS linkedtarget ( sentID INTEGER, linkID INTEGER, bitextID INTEGER, PRIMARY KEY(linkID,sentID) )" | sqlite3 ${LINK_DB}
+	@echo "CREATE INDEX IF NOT EXISTS idx_linkedsource_bitext ON linkedsource (bitextID,sentID)" | sqlite3 ${LINK_DB}
+	@echo "CREATE INDEX IF NOT EXISTS idx_linkedtarget_bitext ON linkedtarget (bitextID,sentID)" | sqlite3 ${LINK_DB}
+	@echo "CREATE INDEX IF NOT EXISTS idx_linkedsource_linkid ON linkedsource (linkID)" | sqlite3 ${LINK_DB}
+	@echo "CREATE INDEX IF NOT EXISTS idx_linkedtarget_linkid ON linkedtarget (linkID)" | sqlite3 ${LINK_DB}
+	@echo "CREATE INDEX IF NOT EXISTS idx_linkedsource_sentid ON linkedsource (sentID)" | sqlite3 ${LINK_DB}
+	@echo "CREATE INDEX IF NOT EXISTS idx_linkedtarget_sentid ON linkedtarget (sentID)" | sqlite3 ${LINK_DB}
+	sqlite3 $< ".dump linkedsource" | ${MODIFY_DB_DUMP} | sqlite3 ${LINK_DB}
+	sqlite3 $< ".dump linkedtarget" | ${MODIFY_DB_DUMP} | sqlite3 ${LINK_DB}
+	@touch $@
+
+
+
+
+
+bitext-db: ${BITEXT_DB}
+
+${BITEXT_DB}: ${LANGPAIR}.db
+	mkdir -p $(dir $@)
+	sqlite3 ${LANGPAIR}.db ".dump bitexts" | sqlite3 $@.tmp
+	echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_bitexts ON bitexts ( corpus, version, fromDoc, toDoc )" \
+	| sqlite3 $@.tmp
+	mv -f $@.tmp $@
+
 
 
 ##------------------------------------------------------------------------------------
@@ -380,6 +444,20 @@ ${LANGUAGE}.ids.db: ${ALL_MONO_IDSDONE}
 	if [ -e ${INDEX_TMPDIR}/$@ ]; then mv -f ${INDEX_TMPDIR}/$@ $@; fi
 
 
+## separate makefile targets for source and target language
+## if necessary (i.e. LANGUAGE is not set to either language)
+
+ifneq (${LANGUAGE},${SRCLANG})
+${SRCLANG}.ids.db:
+	${MAKE} LANGUAGE=${SRCLANG} $@
+endif
+
+ifneq (${LANGUAGE},${TRGLANG})
+${TRGLANG}.ids.db:
+	${MAKE} LANGUAGE=${TRGLANG} $@
+endif
+
+
 
 SENTIDS_DBS = $(patsubst %.ids.db,%.sentids.db,$(wildcard *.ids.db))
 
@@ -392,12 +470,27 @@ add-sentid-index: ${SENTIDS_DBS}
 	mv -f ${INDEX_TMPDIR}/$@ $@
 
 
+.INTERMEDIATE: ${INDEX_TMPDIR}/${LANGUAGE}.ids.db
+
 ${INDEX_TMPDIR}/${LANGUAGE}.ids.db:
 	${MAKE} STORED_FILE=$(notdir $@) retrieve
 	echo "CREATE TABLE IF NOT EXISTS documents ( corpus, version, document )" | sqlite3 $@
-	echo "CREATE UNIQUE INDEX idx_documents ON documents (corpus,version,document)" | sqlite3 $@
+	echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents ON documents (corpus,version,document)" | sqlite3 $@
 	echo "CREATE TABLE IF NOT EXISTS sentids ( id INTEGER, docID INTEGER, sentID TEXT)" | sqlite3 $@
-	echo "CREATE UNIQUE INDEX idx_sentids ON sentids ( docID, sentID)" | sqlite3 $@
+	echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_sentids ON sentids ( docID, sentID)" | sqlite3 $@
+
+ifneq (${LANGUAGE},${SRCLANG})
+.INTERMEDIATE: ${INDEX_TMPDIR}/${SRCLANG}.ids.db
+${INDEX_TMPDIR}/${SRCLANG}.ids.db:
+	${MAKE} LANGUAGE=${SRCLANG} $@
+endif
+
+ifneq (${LANGUAGE},${TRGLANG})
+.INTERMEDIATE: ${INDEX_TMPDIR}/${TRGLANG}.ids.db
+${INDEX_TMPDIR}/${TRGLANG}.ids.db:
+	${MAKE} LANGUAGE=${TRGLANG} $@
+endif
+
 
 ${ALL_MONO_IDSDONE}: ${INDEX_TMPDIR}/${LANGUAGE}.ids.db ${TMP_SENTENCE_DB}
 	@echo "process $@"
@@ -558,9 +651,7 @@ ${ALL_MONO_JSONLDONE}: done/%.jsonl.done: ${INDEX_TMPDIR}/%.jsonl
 ## retrieve a file from allas if it exists
 ## and sync it to the temporary file location as well
 
-retrieve: ${INDEX_TMPDIR}/${STORED_FILE}
-
-${INDEX_TMPDIR}/${STORED_FILE}:
+retrieve:
 	mkdir -p ${INDEX_TMPDIR}
 	if [ ! -e ${STORED_FILE} ]; then \
 	  if [ `grep '${STORED_FILE}' index.txt | wc -l` -gt 0 ]; then \
@@ -569,8 +660,23 @@ ${INDEX_TMPDIR}/${STORED_FILE}:
 	  fi \
 	fi
 	if [ -e ${STORED_FILE} ]; then \
-	  rsync ${STORED_FILE} $@; \
+	  rsync ${STORED_FILE} ${INDEX_TMPDIR}/${STORED_FILE}; \
 	fi
+
+
+# retrieve: ${INDEX_TMPDIR}/${STORED_FILE}
+
+# ${INDEX_TMPDIR}/${STORED_FILE}:
+# 	mkdir -p ${INDEX_TMPDIR}
+# 	if [ ! -e ${STORED_FILE} ]; then \
+# 	  if [ `grep '${STORED_FILE}' index.txt | wc -l` -gt 0 ]; then \
+# 	    echo "download ${STORED_FILE}"; \
+# 	    wget -qq ${STORAGE_BASE}index/${STORED_FILE}; \
+# 	  fi \
+# 	fi
+# 	if [ -e ${STORED_FILE} ]; then \
+# 	  rsync ${STORED_FILE} $@; \
+# 	fi
 
 
 

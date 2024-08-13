@@ -154,6 +154,6 @@ for line in sys.stdin:
     try:
         parser.Parse(line)
     except:
-        sys.stderr.write("XML parser error - try to continue\n")
+        sys.stderr.write("x")
 
 con.close()
