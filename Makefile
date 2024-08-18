@@ -77,11 +77,14 @@ BITEXT_DB         := sqlite/${LANGPAIR}.bitexts.db
 ALG_DB            := sqlite/${LANGPAIR}.alg.db
 LINK_DB           := sqlite/${LANGPAIR}.linked.db
 
-.PRECIOUS: ${ALG_DB} ${LINK_DB}
-.NOTINTERMEDIATE: ${ALL_ALG_DBS} ${ALL_LINK_DBS}
 
 ALG_DB_MERGED     := $(patsubst %.db,%.merged,${ALL_LINK_DBS})
 LINK_DB_MERGED    := $(patsubst %.db,%.merged,${ALL_LINK_DBS})
+
+LINK_DB_LATEST_MERGED := $(patsubst %.linked.merged,%.latest.merged,\
+			$(sort $(shell echo "${ALG_DB_MERGED}" | tr ' ' "\n" | cut -f1,2,4 -d/)))
+
+
 
 
 ## directory with scripts and tools
@@ -89,15 +92,31 @@ LINK_DB_MERGED    := $(patsubst %.db,%.merged,${ALL_LINK_DBS})
 SCRIPTDIR = scripts/
 
 
+## files that we do not want to delete even if some kind of make target fails
 
-.PRECIOUS: 	${LANGUAGE}.db ${LANGUAGE}.ids.db ${LANGUAGE}.idx.db ${LANGPAIR}.db \
-		${LANGUAGE}.idx.gz ${LANGUAGE}.dedup.gz 
+.PRECIOUS: 	${LANGUAGE}.db \
+		${LANGUAGE}.ids.db \
+		${LANGUAGE}.idx.db \
+		${LANGPAIR}.db \
+		${LANGUAGE}.idx.gz \
+		${LANGUAGE}.dedup.gz \
+		${ALG_DB} \
+		${LINK_DB}
+
+
+## files that we want to keep even if they are only build as pre-requisites in implicit rules
+
+.NOTINTERMEDIATE: ${ALL_ALG_DBS} ${ALL_LINK_DBS}
+
 
 ## intermediate files that can be deleted after finishing up
 
 .INTERMEDIATE: ${ALL_MONO_DEDUP}
 .INTERMEDIATE: ${ALL_MONO_IDX}
 .INTERMEDIATE: ${TMP_SENTENCE_DB}
+
+
+## unicode cleanup
 
 # FIX_UNICODE := perl -CS -pe 'tr[\x{9}\x{A}\x{D}\x{20}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}][]cd;'
 FIX_UNICODE := ${PARALLEL} ftfy
@@ -118,10 +137,12 @@ all-mono: ${LANGUAGE}.counts
 all-links: ${LANGPAIR}.db
 
 
+
+
 new-linkdb-job:
 	${MAKE} HPC_CORES=4 THREADS=4 HPC_MEM=16g HPC_TIME=72:00 HPC_DISK=1000 new-linkdb.submit
 
-new-linkdb: ${LINK_DB}
+new-linkdb: ${LINK_DB} ${BITEXT_DB}
 
 
 
@@ -170,6 +191,9 @@ tmp-dedup-fix:
 	touch ${ALL_MONO_DONE}
 	touch ${LANGUAGE}.dedup.gz
 
+
+
+## TODO: upload targets are not up-to-date!
 
 SWIFT_PARAMS = --use-slo --segment-size 5G --changed --skip-identical
 
@@ -249,6 +273,8 @@ counts-from-storage:
 ## and no local file exists
 ${LANGUAGE}.dedup.gz: ${ALL_MONO_DONE}
 	${MAKE} STORED_FILE=$@ retrieve
+	mkdir -p $(dir ${INDEX_TMPDIR}/$@)
+	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	if [ `find ${INDEX_TMPDIR} -name '*.dedup' | wc -l` -gt 0 ]; then \
 	  if [ -e ${INDEX_TMPDIR}/$@ ]; then \
 	    echo "merge all corpora with ${LANGUAGE}.dedup.gz"; \
@@ -283,6 +309,8 @@ ${LANGUAGE}.dedup.gz: ${ALL_MONO_DONE}
 
 ${LANGUAGE}.db: ${LANGUAGE}.dedup.gz
 	${MAKE} STORED_FILE=$@ retrieve
+	mkdir -p $(dir ${INDEX_TMPDIR}/$@)
+	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	${GZIP} -cd < $< | ${SCRIPTDIR}sent2sqlite.py ${INDEX_TMPDIR}/$@
 	mv -f ${INDEX_TMPDIR}/$@ $@
 	echo "PRAGMA journal_mode=WAL" | sqlite3 $@
@@ -295,6 +323,8 @@ ${LANGUAGE}.db: ${LANGUAGE}.dedup.gz
 
 %.fts5.db: %.db
 	${MAKE} STORED_FILE=$@ retrieve
+	mkdir -p $(dir ${INDEX_TMPDIR}/$@)
+	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	echo "CREATE VIRTUAL TABLE IF NOT EXISTS sentences USING FTS5(sentence)" | sqlite3 ${INDEX_TMPDIR}/$@
 	echo "ATTACH DATABASE '$(@:.fts5.db=.db)' as org;INSERT OR IGNORE INTO sentences SELECT * FROM org.sentences;" | sqlite3 ${INDEX_TMPDIR}/$@
 	mv -f ${INDEX_TMPDIR}/$@ $@
@@ -318,6 +348,8 @@ ${LANGPAIR}.db: ${ALL_ALG_DONE}
 
 ${INDEX_TMPDIR}/${LANGPAIR}.db:
 	${MAKE} STORED_FILE=${LANGPAIR}.db retrieve
+	mkdir -p $(dir $@)
+	if [ -e $(notdir $@) ]; then rsync $(notdir $@) $@; fi
 	@if [ ! -e $@ ]; then \
 	  echo "CREATE TABLE IF NOT EXISTS bitexts ( corpus TEXT, version TEXT, fromDoc TEXT, toDoc TEXT )" \
 		| sqlite3 $@; \
@@ -343,6 +375,8 @@ ${ALL_ALG_DONE}: ${INDEX_TMPDIR}/${LANGPAIR}.db
 ##-----------------------------------------------------------
 ## DB that maps internal sentence IDs to internal link IDs
 ## --> this enables search over bitexts
+##
+## OLD STYLE - NOW DEPRECATED
 ##-----------------------------------------------------------
 
 
@@ -386,45 +420,156 @@ ${ALL_LINKED_DONE}: ${LINKDB_PREREQUISITES} ${LINKDB_TMP_TARGET}
 
 
 
+
+
 ##---------------------------------------------------------
-## NEW: individual link files for each corpus/version
-## --> better than one gigantic index files for all corpora
+## database of linked source and target sentences
+##  --> maps internal sentence IDs to internal link IDs
+##
+## (1) create individual link DBs for each corpus release
+## (2) merge them into one link DB for the current language pair
 ##---------------------------------------------------------
+
+
+
+## 2.0: take care of pre-requisites and merge all individual DBs
+##      concurrent calls to the same DB do not seem to work
+##      it produces DB locked errors even with the timeout settings
+##      --> need to enforce sequential merging (make -j1)
+## 2.4: move the temporary global link-DB back here
+
+
+${LINK_DB}: ${ALL_LINK_DBS} # ${LINK_DB_MERGED}
+	${MAKE} -j1 merge-all-linkdbs
+	if [ -e ${TMP_LINK_DB} ]; then rsync -av ${TMP_LINK_DB} $@; fi
+
+## 1: individual link databases (one per corpus/version)
 
 ${ALL_LINK_DBS}: ${LINKDB_PREREQUISITES}
+	@mkdir -p $(dir ${INDEX_TMPDIR}/$@)
+	${SCRIPTDIR}bitextlinks.py $^ ${INDEX_TMPDIR}/$@ \
+		$(word 2,$(subst /, ,$@)) $(word 3,$(subst /, ,$@))
 	@mkdir -p $(dir $@)
-	${SCRIPTDIR}bitextlinks.py $^ $@ $(word 2,$(subst /, ,$@)) $(word 3,$(subst /, ,$@))
+	mv -f ${INDEX_TMPDIR}/$@ $@
 
-# (2) merge all individual link DBs into one link DB for the current langpair
+## 2.1: initialize global link database in local tmp dir with fast I/O
 
-${LINK_DB}: ${ALL_LINK_DBS} ${LINK_DB_MERGED}
+TMP_LINK_DB := ${INDEX_TMPDIR}/${LINK_DB}
+.INTERMEDIATE: ${TMP_LINK_DB}
 
-MODIFY_DB_DUMP = sed 's/CREATE TABLE/CREATE TABLE IF NOT EXISTS/;s/INSERT/INSERT OR IGNORE/;'
+SQLITE3 = sqlite3 -cmd ".timeout 100000"
 
-${LINK_DB_MERGED}: %.merged: %.db
-	@echo "CREATE TABLE IF NOT EXISTS linkedsource ( sentID INTEGER, linkID INTEGER, bitextID INTEGER, PRIMARY KEY(linkID,sentID) )" | sqlite3 ${LINK_DB}
-	@echo "CREATE TABLE IF NOT EXISTS linkedtarget ( sentID INTEGER, linkID INTEGER, bitextID INTEGER, PRIMARY KEY(linkID,sentID) )" | sqlite3 ${LINK_DB}
-	@echo "CREATE INDEX IF NOT EXISTS idx_linkedsource_bitext ON linkedsource (bitextID,sentID)" | sqlite3 ${LINK_DB}
-	@echo "CREATE INDEX IF NOT EXISTS idx_linkedtarget_bitext ON linkedtarget (bitextID,sentID)" | sqlite3 ${LINK_DB}
-	@echo "CREATE INDEX IF NOT EXISTS idx_linkedsource_linkid ON linkedsource (linkID)" | sqlite3 ${LINK_DB}
-	@echo "CREATE INDEX IF NOT EXISTS idx_linkedtarget_linkid ON linkedtarget (linkID)" | sqlite3 ${LINK_DB}
-	@echo "CREATE INDEX IF NOT EXISTS idx_linkedsource_sentid ON linkedsource (sentID)" | sqlite3 ${LINK_DB}
-	@echo "CREATE INDEX IF NOT EXISTS idx_linkedtarget_sentid ON linkedtarget (sentID)" | sqlite3 ${LINK_DB}
-	sqlite3 $< ".dump linkedsource" | ${MODIFY_DB_DUMP} | sqlite3 ${LINK_DB}
-	sqlite3 $< ".dump linkedtarget" | ${MODIFY_DB_DUMP} | sqlite3 ${LINK_DB}
+${TMP_LINK_DB}:
+	${MAKE} STORED_FILE=${LINK_DB} retrieve
+	mkdir -p $(dir $@)
+	if [ -e ${LINK_DB} ]; then rsync -av ${LINK_DB} $@; fi
+	@echo "CREATE TABLE IF NOT EXISTS linkedsource ( sentID INTEGER, linkID INTEGER, bitextID INTEGER, PRIMARY KEY(linkID,sentID) )" | ${SQLITE3} $@
+	@echo "CREATE TABLE IF NOT EXISTS linkedtarget ( sentID INTEGER, linkID INTEGER, bitextID INTEGER, PRIMARY KEY(linkID,sentID) )" | ${SQLITE3} $@
+	@echo "CREATE INDEX IF NOT EXISTS idx_linkedsource_bitext ON linkedsource (bitextID,sentID)" | ${SQLITE3} $@
+	@echo "CREATE INDEX IF NOT EXISTS idx_linkedtarget_bitext ON linkedtarget (bitextID,sentID)" | ${SQLITE3} $@
+	@echo "CREATE INDEX IF NOT EXISTS idx_linkedsource_linkid ON linkedsource (linkID)" | ${SQLITE3} $@
+	@echo "CREATE INDEX IF NOT EXISTS idx_linkedtarget_linkid ON linkedtarget (linkID)" | ${SQLITE3} $@
+	@echo "CREATE INDEX IF NOT EXISTS idx_linkedsource_sentid ON linkedsource (sentID)" | ${SQLITE3} $@
+	@echo "CREATE INDEX IF NOT EXISTS idx_linkedtarget_sentid ON linkedtarget (sentID)" | ${SQLITE3} $@
+	@echo "PRAGMA journal_mode=WAL" | ${SQLITE3} $@
+
+
+
+## 2.2a: merge all individual link databases with the global link DB in tmp dir
+##  ---> all releases of all corpora are merged into one DB
+##  ---> a lot of repeated sentence alignments will be included
+##  ---> merge only the latest release with the target below instead (merge-latest-linkdbs)
+
+.PHONY: merge-all-linkdbs
+merge-all-linkdbs: ${LINK_DB_MERGED}
+
+MODIFY_DB_DUMP := sed 's/CREATE TABLE/CREATE TABLE IF NOT EXISTS/;s/INSERT/INSERT OR IGNORE/;'
+
+${LINK_DB_MERGED}: %.merged: %.db ${TMP_LINK_DB}
+	@mkdir -p $(dir ${INDEX_TMPDIR}/$<)
+	@rsync $< ${INDEX_TMPDIR}/$<.tmp
+	@echo "PRAGMA journal_mode=WAL" | ${SQLITE3} ${TMP_LINK_DB}
+	${SQLITE3} ${INDEX_TMPDIR}/$<.tmp ".dump linkedsource" | ${MODIFY_DB_DUMP} | ${SQLITE3} ${TMP_LINK_DB}
+	${SQLITE3} ${INDEX_TMPDIR}/$<.tmp ".dump linkedtarget" | ${MODIFY_DB_DUMP} | ${SQLITE3} ${TMP_LINK_DB}
+	@rm -f ${INDEX_TMPDIR}/$<.tmp
+	@rsync ${TMP_LINK_DB} ${LINK_DB}
 	@touch $@
 
 
 
+## 2.2b: merge individual link databases of the LATEST RELEASE with the global link DB in tmp dir
+##  --> need to keep track of releases that have been merged
+##  --> when updating: need to remove old releases and add the new one
 
+.PHONY: merge-latest-linkdbs
+merge-latest-linkdbs: ${LINK_DB_LATEST_MERGED}
+	@if [ -e ${TMP_LINK_DB} ]; then \
+	  echo "cleanup and copy ${LINK_DB}"; \
+	  echo "VACUUM;" | ${SQLITE3} ${TMP_LINK_DB}; \
+	  rsync -av ${TMP_LINK_DB} ${LINK_DB}; \
+	fi
+
+# check for the latest release in the corpus yaml file
+# remove links from previously merged releases
+# add links from the latest release
+# mark the corpus as done
+
+${LINK_DB_LATEST_MERGED}: ${BITEXT_DB} ${TMP_LINK_DB}
+	@make CORPUS=$(word 2,$(subst /, ,$@)) \
+	     LATEST_VERSION="$(shell grep 'latest_release:' releases/$(word 2,$(subst /, ,$@))/info.yaml | cut -f2 -d' ')" \
+	     MERGED_VERSIONS="$(shell find sqlite/$(word 2,$(subst /, ,$@)) -name '${LANGPAIR}.linked.merged' | cut -f3 -d/)" \
+	merge-latest-corpus-links
+	@rsync ${TMP_LINK_DB} ${LINK_DB}
+	@touch $@
+
+.PHONY: merge-latest-corpus-links
+merge-latest-corpus-links:
+	@for v in $(filter-out ${LATEST_VERSION},${MERGED_VERSIONS}); do \
+	  echo "remove links for $(CORPUS)/$$v/${LANGPAIR}"; \
+	  echo "ATTACH DATABASE '${BITEXT_DB}' as b;\
+		DELETE FROM linkedsource WHERE bitextID IN \
+			( SELECT DISTINCT rowid FROM b.bitexts WHERE corpus='${CORPUS}' AND version='$$v' ); \
+		DELETE FROM linkedtarget WHERE bitextID IN \
+			( SELECT DISTINCT rowid FROM b.bitexts WHERE corpus='${CORPUS}' AND version='$$v' );" \
+	  | ${SQLITE3} ${TMP_LINK_DB}; \
+	  rm -f sqlite/$(CORPUS)/$$v/${LANGPAIR}.linked.merged; \
+	done
+	@for v in $(filter-out ${MERGED_VERSIONS},${LATEST_VERSION} ${MERGED_VERSIONS}); do \
+	  echo "add links for $(CORPUS)/$$v/${LANGPAIR}"; \
+	  ${MAKE} sqlite/${CORPUS}/$$v/${LANGPAIR}.linked.db; \
+	  if [ -e sqlite/${CORPUS}/$$v/${LANGPAIR}.linked.db ]; then \
+	    rsync sqlite/${CORPUS}/$$v/${LANGPAIR}.linked.db ${INDEX_TMPDIR}/${CORPUS}-$$v-${LANGPAIR}.linked.db; \
+	    echo "ATTACH DATABASE '${INDEX_TMPDIR}/${CORPUS}-$$v-${LANGPAIR}.linked.db' as l;\
+		  INSERT OR IGNORE INTO linkedsource SELECT * FROM l.linkedsource;\
+		  INSERT OR IGNORE INTO linkedtarget SELECT * FROM l.linkedtarget;" \
+	    | ${SQLITE3} ${TMP_LINK_DB}; \
+	    rm -f ${INDEX_TMPDIR}/${CORPUS}-$$v-${LANGPAIR}.linked.db; \
+	    touch sqlite/$(CORPUS)/$$v/${LANGPAIR}.linked.merged; \
+	  else \
+	    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"; \
+	    echo "!!!!!!!! PROBLEM WITH sqlite/${CORPUS}/$$v/${LANGPAIR}.linked.db"; \
+	    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"; \
+	  fi \
+	done
+
+
+###############################################################################
+
+
+
+## database of all bitexts and aligned corpra
+## (copy from tables in alignment database)
 
 bitext-db: ${BITEXT_DB}
 
 ${BITEXT_DB}: ${LANGPAIR}.db
 	mkdir -p $(dir $@)
+	rm -f $@.tmp
 	sqlite3 ${LANGPAIR}.db ".dump bitexts" | sqlite3 $@.tmp
+	sqlite3 ${LANGPAIR}.db ".dump aligned_corpora" | sqlite3 $@.tmp
 	echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_bitexts ON bitexts ( corpus, version, fromDoc, toDoc )" \
 	| sqlite3 $@.tmp
+	echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_corpora ON aligned_corpora ( corpus, version )" | sqlite3 $@.tmp
 	mv -f $@.tmp $@
 
 
@@ -474,6 +619,8 @@ add-sentid-index: ${SENTIDS_DBS}
 
 ${INDEX_TMPDIR}/${LANGUAGE}.ids.db:
 	${MAKE} STORED_FILE=$(notdir $@) retrieve
+	mkdir -p $(dir $@)
+	if [ -e $(notdir $@) ]; then rsync -av $(notdir $@) $@; fi
 	echo "CREATE TABLE IF NOT EXISTS documents ( corpus, version, document )" | sqlite3 $@
 	echo "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents ON documents (corpus,version,document)" | sqlite3 $@
 	echo "CREATE TABLE IF NOT EXISTS sentids ( id INTEGER, docID INTEGER, sentID TEXT)" | sqlite3 $@
@@ -511,8 +658,9 @@ ${ALL_MONO_IDSDONE}: ${INDEX_TMPDIR}/${LANGUAGE}.ids.db ${TMP_SENTENCE_DB}
 ##-------------------------------------------------------------------------
 
 ${LANGUAGE}.idx.db: ${LANGUAGE}.idx.gz
-	mkdir -p ${INDEX_TMPDIR}
 	${MAKE} STORED_FILE=$@ retrieve
+	mkdir -p $(dir ${INDEX_TMPDIR}/$@)
+	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	echo "CREATE TABLE IF NOT EXISTS sentindex ( id, corpus, version, document, parID, sentID, length)" \
 	| sqlite3 ${INDEX_TMPDIR}/$@
 	echo "create index idx_all on sentindex (corpus,version,document,sentID);" | sqlite3 ${INDEX_TMPDIR}/$@
@@ -523,8 +671,9 @@ ${LANGUAGE}.idx.db: ${LANGUAGE}.idx.gz
 ## merge index files into the existing list
 
 ${LANGUAGE}.idx.gz: ${ALL_MONO_IDXDONE}
-	mkdir -p ${INDEX_TMPDIR}
 	${MAKE} STORED_FILE=$@ retrieve
+	mkdir -p $(dir ${INDEX_TMPDIR}/$@)
+	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	if [ -e ${INDEX_TMPDIR}/$@ ]; then \
 	  find ${INDEX_TMPDIR} -name '*.idx' | xargs cat <(${GZIP} -cd ${INDEX_TMPDIR}/$@) | ${GZIP} -c > $@; \
 	else \
@@ -592,6 +741,8 @@ ${LANGUAGE}-new.idx.db:
 
 ${LANGUAGE}.jsonl.gz: ${ALL_MONO_JSONLDONE}
 	${MAKE} STORED_FILE=$@ retrieve
+	mkdir -p $(dir ${INDEX_TMPDIR}/$@)
+	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	if [ -e ${INDEX_TMPDIR}/$@ ]; then \
 	  find ${INDEX_TMPDIR} -name '*.jsonl' | xargs cat <(${GZIP} -cd ${INDEX_TMPDIR}/$@) | ${GZIP} -c > $@; \
 	else \
@@ -652,16 +803,16 @@ ${ALL_MONO_JSONLDONE}: done/%.jsonl.done: ${INDEX_TMPDIR}/%.jsonl
 ## and sync it to the temporary file location as well
 
 retrieve:
-	mkdir -p ${INDEX_TMPDIR}
-	if [ ! -e ${STORED_FILE} ]; then \
+	@if [ ! -e ${STORED_FILE} ]; then \
 	  if [ `grep '${STORED_FILE}' index.txt | wc -l` -gt 0 ]; then \
 	    echo "download ${STORED_FILE}"; \
 	    wget -qq ${STORAGE_BASE}index/${STORED_FILE}; \
 	  fi \
 	fi
-	if [ -e ${STORED_FILE} ]; then \
-	  rsync ${STORED_FILE} ${INDEX_TMPDIR}/${STORED_FILE}; \
-	fi
+#	mkdir -p ${INDEX_TMPDIR}
+#	if [ -e ${STORED_FILE} ]; then \
+#	  rsync ${STORED_FILE} ${INDEX_TMPDIR}/${STORED_FILE}; \
+#	fi
 
 
 # retrieve: ${INDEX_TMPDIR}/${STORED_FILE}

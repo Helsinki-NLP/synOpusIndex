@@ -150,10 +150,16 @@ parser = xml.parsers.expat.ParserCreate()
 parser.StartElementHandler = start_element
 parser.EndElementHandler   = end_element
 
+errorCount = 0;
 for line in sys.stdin:
     try:
         parser.Parse(line)
     except:
-        sys.stderr.write("x")
+        errorCount+=1
+        # sys.stderr.write("x")
 
 con.close()
+if errorCount:
+    print(f"Could not parse {errorCount} lines")
+    print(argv)
+    
