@@ -34,7 +34,7 @@ Optionally, one can also create a full-text-search index over sentences in yet a
 
 ### Sentence index DB `xx.ids.db`
 
-* Table `document`:
+* Table `documents`:
 
 | column      | type           |
 |-------------|----------------|
@@ -68,7 +68,7 @@ This database has the same structure as the sentence DB but uses the FTS5 extens
 
 
 
-## Bitext DB's `xx-yy.db`
+## Bitext alignment DB `xx-yy.db`
 
 Sentence alignments are stored per language pair (source language `xx` and target language `yy`). There are two tables in the database similar to the monolingual sentence index DB:
 
@@ -102,6 +102,56 @@ All information is directly taken from the XCES Align files in OPUS. `fromDoc` c
 `bitextID` corresponds to `rowid` in table `bitexs`. `srcIDs` and `trgIDs` are strings that correspond to lists of sentence IDs in OPUS (that should match `sentID` in the `sentids` table in the corresponding sentence indeces of source and target language). The strings are directly taken from the XCES Align files in OPUS (`xtargets` argument in sentence links). `alignType` specifies the alignment type in terms of the number of source and target sentences. For example, `2-1` refers to an alignment of 2 sentences in the source language aligned to one sentence in the target language. `alignerScore` is also taken from the original OPUS alignment files and may correspond to different scores depending on the tool used for producing the original bitext. If there is no score it will be set to 0. `cleanerScore` is reserved for an additional score that may be produced by tools like bicleaner or OpusFilter.
 
 Similar to the sentence index DB, there is also a view `alignments` defined over tables `bitexts` and `links` that joins both tables over columns `bitexts.rowid` and `links.bitextID`. An insert trigger is also specified that allows to enter data for both tables if needed.
+
+
+
+## Sentence Link DB `sqlite/xx-yy.db`
+
+In order to search and browse through the bitexts in OPUS, there are also the following tables extracted from the databases described above. Those tables map internal sentence IDs to sentence alignments to avoid expensive joins over the sentence index table. There are three tables in this database:
+
+* `links`: Similar to the `links` table in the master alignment database but with additional fields `srcSentIDs` and `trgSentIDs` that provide the internal sentence IDs of aligned sentences corresponding to the `rowid` of the sentence table for each language. `linkID` corresponds to `rowid` in the master alignment file
+* `linkedsource`: A table that maps internal sentence IDs of the source language (rowid's in the corresponding sentence DB) to sentence alignment IDs (`linkID` corresponding to `rowid` in the `links` table of the master alignment database)
+* `linkedtarget`: The same mapping for linked target language sentences
+
+There are also indivudual link DB's for each corpus release. They are stored in sub-directories of `sqlite` indicating the corpus name and release version.
+
+
+* Table `links`:
+
+| column       | type           |
+|--------------|----------------|
+| linkID       | INTEGER UNIQUE |
+| bitextID     | INTEGER        |
+| srcIDs       | TEXT           |
+| trgIDs       | TEXT           |
+| srcSentIDs   | TEXT           |
+| trgSentIDs   | TEXT           |
+| alignType    | TEXT           |
+| alignerScore | REAL           |
+| cleanerScore | REAL           |
+
+
+* Table `linkedsource`:
+
+| column       | type           |
+|--------------|----------------|
+| sentID       | INTEGER        |
+| linkID       | INTEGER        |
+| bitextID     | INTEGER        |
+
+`(sentID,linkID)` is used as a unique primary key.
+
+
+* Table `linkedtarget`:
+
+| column       | type           |
+|--------------|----------------|
+| sentID       | INTEGER        |
+| linkID       | INTEGER        |
+| bitextID     | INTEGER        |
+
+`(sentID,linkID)` is used as a unique primary key.
+
 
 
 
