@@ -104,13 +104,13 @@ all-mono: ${LANGUAGE}.counts
 
 .PHONY: all-links
 all-links: ${LANGPAIR}.db
-	${MAKE} ${LINK_DB} ${BITEXT_DB}
+	${MAKE} ${LINK_DB}
 
 
 
 
 .PHONY: linkdb
-linkdb: ${LINK_DB} ${BITEXT_DB}
+linkdb: ${LINK_DB}
 
 linkdb-job:
 	${MAKE} HPC_CORES=4 THREADS=4 HPC_MEM=16g HPC_TIME=72:00 HPC_DISK=1000 linkdb.submit
@@ -222,6 +222,7 @@ CREATE_INDEX        := CREATE INDEX IF NOT EXISTS
 CREATE_UNIQUE_INDEX := CREATE UNIQUE INDEX IF NOT EXISTS
 INSERT_INTO         := INSERT OR IGNORE INTO
 
+MODIFY_DB_DUMP      := sed 's/CREATE TABLE/${CREATE_TABLE}/;s/INSERT/INSERT OR IGNORE/;'
 
 ## merge all deduplicated files
 ## download the old dedup file in case it exists
@@ -332,41 +333,75 @@ ${ALL_ALG_DONE}: ${INDEX_TMPDIR}/${LANGPAIR}.db
 ##--------------------------------------------------------------------------------
 
 
-## 2.0: take care of pre-requisites and merge all individual DBs
-##      concurrent calls to the same DB do not seem to work
-##      it produces DB locked errors even with the timeout settings
-##      --> need to enforce sequential merging (make -j1)
-## 2.4: move the temporary global link-DB back here
+## individual linkDBs as pre-requisites
+## merging into on link DB does not seem to work with multiple threads
+## --> call the PHONY target merge-latest-linkdbs below with a single-threaded make call
+##     instead of adding ${LINK_DB_LATEST_MERGED} as pre-requisites
+## --> merging takes place in temporary location
+## --> move the link database back to the target location
+## --> add bitext and aligned_corpora tables from the master bitext database
+## --> finally, create indeces over bitexts and aligned_corpora
 
-
-${LINK_DB}: ${ALL_LINK_DBS}
+${LINK_DB}: ${LANGPAIR}.db ${ALL_LINK_DBS}
 	${MAKE} -j1 merge-latest-linkdbs
-	if [ -e ${TMP_LINK_DB} ]; then rsync -av ${TMP_LINK_DB} $@; fi
+	if [ -e ${TMP_LINK_DB} ]; then mv -f ${TMP_LINK_DB} $@; fi
+	sqlite3 ${LANGPAIR}.db ".dump bitexts" | ${MODIFY_DB_DUMP} | sqlite3 $@
+	sqlite3 ${LANGPAIR}.db ".dump aligned_corpora" | ${MODIFY_DB_DUMP} | sqlite3 $@
+	echo "${CREATE_UNIQUE_INDEX} idx_bitexts ON bitexts (corpus,version,fromDoc,toDoc)" | sqlite3 $@
+	echo "${CREATE_UNIQUE_INDEX} idx_corpora ON aligned_corpora (corpus,version)" | sqlite3 $@
+
+
+## phony target to merge link tables from each corpus
+## --> only the latest release will be added
+## --> this makes updating very complicated because old data needs to be deleted
+
+.PHONY: merge-latest-linkdbs
+merge-latest-linkdbs: ${LINK_DB_LATEST_MERGED}
+	@if [ -e ${TMP_LINK_DB} ]; then \
+	  echo "cleanup and copy ${LINK_DB}"; \
+	  echo "VACUUM;" | ${SQLITE3} ${TMP_LINK_DB}; \
+	  rsync -av ${TMP_LINK_DB} ${LINK_DB}; \
+	fi
 
 
 
-## 1: individual link databases (one per corpus/version)
+## create individual link databases (one per corpus/version)
+## --> pre-requisite databases will be copied to a temporary location
+## --> this makes lookup much faster (assuming that the tmpdisk is a fast local disk)
 
 LINKDB_PREREQUISITES := ${INDEX_TMPDIR}/linkdb/${LANGPAIR}.db \
 			${INDEX_TMPDIR}/linkdb/${SRCLANG}.ids.db \
 			${INDEX_TMPDIR}/linkdb/${TRGLANG}.ids.db
 
+.INTERMEDIATE: ${LINKDB_PREREQUISITES}
+${LINKDB_PREREQUISITES}: ${INDEX_TMPDIR}/linkdb/%: %
+	mkdir -p $(dir $@)
+	rsync -av $< $@
+
+
+## add all links to the individual link databases
+## do that in a temporary location and move the final database back to the target
 
 # LINK2SQLITE = ${SCRIPTDIR}bitextlinks.py
 LINK2SQLITE = ${SCRIPTDIR}links2sqlite.py
 
 ${ALL_LINK_DBS}: ${LINKDB_PREREQUISITES}
 	@mkdir -p $(dir ${INDEX_TMPDIR}/$@)
-	${LINK2SQLITE} $^ ${INDEX_TMPDIR}/$@ \
-		$(word 2,$(subst /, ,$@)) $(word 3,$(subst /, ,$@))
+	${LINK2SQLITE} $^ ${INDEX_TMPDIR}/$@ $(word 2,$(subst /, ,$@)) $(word 3,$(subst /, ,$@))
 	@mkdir -p $(dir $@)
 	mv -f ${INDEX_TMPDIR}/$@ $@
 
-## 2.1: initialize global link database in local tmp dir with fast I/O
+
+
+## initialize the global link database in local tmp dir with fast I/O
+## declare this to be an intermediate file to remove it after finishing the process
 
 TMP_LINK_DB := ${INDEX_TMPDIR}/${LINK_DB}
 .INTERMEDIATE: ${TMP_LINK_DB}
 
+
+## open with timeout to allow concurrent access
+## but that still does not seem to work well (skip timeout?)
 SQLITE3 = sqlite3 -cmd ".timeout 100000"
 
 ${TMP_LINK_DB}:
@@ -381,7 +416,7 @@ ${TMP_LINK_DB}:
 	@echo "${CREATE_INDEX} idx_linkedtarget_linkid ON linkedtarget (linkID)" | ${SQLITE3} $@
 	@echo "${CREATE_INDEX} idx_linkedsource_sentid ON linkedsource (sentID)" | ${SQLITE3} $@
 	@echo "${CREATE_INDEX} idx_linkedtarget_sentid ON linkedtarget (sentID)" | ${SQLITE3} $@
-	@echo "${CREATE_TABLE} links ( linkID INTEGER, bitextID, \
+	@echo "${CREATE_TABLE} links ( linkID INTEGER NOT NULL PRIMARY KEY, bitextID, \
                                        srcIDs TEXT, trgIDs TEXT, srcSentIDs TEXT, trgSentIDs TEXT, \
                                        alignType TEXT, alignerScore REAL, cleanerScore REAL)" | ${SQLITE3} $@
 	@echo "${CREATE_UNIQUE_INDEX} idx_links ON links ( bitextID, srcIDs, trgIDs )" | ${SQLITE3} $@
@@ -390,35 +425,54 @@ ${TMP_LINK_DB}:
 	@echo "PRAGMA journal_mode=WAL" | ${SQLITE3} $@
 
 
-.INTERMEDIATE: ${LINKDB_PREREQUISITES}
-${LINKDB_PREREQUISITES}: ${INDEX_TMPDIR}/linkdb/%: %
-	mkdir -p $(dir $@)
-	rsync -av $< $@
 
+## merge links into the global link database
+## --> only the latest release will be kept
+## --> this makes updating quite complicated
+##
+## - check for the latest release in the corpus yaml file
+## - remove links from previously merged releases
+## - add links from the latest release
+## - mark the corpus as done (merged flag)
 
-
-## 2.2b: merge individual link databases of the LATEST RELEASE with the global link DB in tmp dir
-##  --> need to keep track of releases that have been merged
-##  --> when updating: need to remove old releases and add the new one
-
-.PHONY: merge-latest-linkdbs
-merge-latest-linkdbs: ${LINK_DB_LATEST_MERGED}
-	@if [ -e ${TMP_LINK_DB} ]; then \
-	  echo "cleanup and copy ${LINK_DB}"; \
-	  echo "VACUUM;" | ${SQLITE3} ${TMP_LINK_DB}; \
-	  rsync -av ${TMP_LINK_DB} ${LINK_DB}; \
-	fi
-
-# check for the latest release in the corpus yaml file
-# remove links from previously merged releases
-# add links from the latest release
-# mark the corpus as done
-
-${LINK_DB_LATEST_MERGED}: ${BITEXT_DB} ${TMP_LINK_DB}
-	@make CORPUS=$(word 2,$(subst /, ,$@)) \
-	     LATEST_VERSION="$(shell grep 'latest_release:' releases/$(word 2,$(subst /, ,$@))/info.yaml | cut -f2 -d' ')" \
-	     MERGED_VERSIONS="$(shell find sqlite/$(word 2,$(subst /, ,$@)) -mindepth 2 -name '${LANGPAIR}.merged' | cut -f3 -d/)" \
-	merge-latest-corpus-links
+${LINK_DB_LATEST_MERGED}: ${TMP_LINK_DB}
+	@( c=$(word 2,$(subst /, ,$@)); \
+	  l=`grep 'latest_release:' releases/$$c/info.yaml | cut -f2 -d' ' | xargs`; \
+	  m=`find sqlite/$$c -mindepth 2 -name '${LANGPAIR}.merged' | cut -f3 -d/ | xargs`; \
+	  for v in $$m; do \
+	    if [ "$$l" != "$$v" ]; then \
+	      echo "remove links for $$c/$$v/${LANGPAIR}"; \
+	      echo "ATTACH DATABASE '${LANGPAIR}.db' as b;\
+		    DELETE FROM links WHERE bitextID IN \
+			( SELECT DISTINCT rowid FROM b.bitexts WHERE corpus='$$c' AND version='$$v' ); \
+		    DELETE FROM linkedsource WHERE bitextID IN \
+			( SELECT DISTINCT rowid FROM b.bitexts WHERE corpus='$$c' AND version='$$v' ); \
+		    DELETE FROM linkedtarget WHERE bitextID IN \
+			( SELECT DISTINCT rowid FROM b.bitexts WHERE corpus='$$c' AND version='$$v' );" \
+	  	    | ${SQLITE3} ${TMP_LINK_DB}; \
+	      rm -f sqlite/$$c/$$v/${LANGPAIR}.merged; \
+	    fi \
+	  done; \
+	  if [ ! -e sqlite/$$c/$$l/${LANGPAIR}.merged ]; then \
+	    echo "add links for $$c/$$l/${LANGPAIR}"; \
+	    if [ ! -e sqlite/$$c/$$l/${LANGPAIR}.db ]; then \
+		${MAKE} sqlite/$$c/$$l/${LANGPAIR}.db; \
+	    fi; \
+	    if [ -e sqlite/$$c/$$l/${LANGPAIR}.db ]; then \
+	      rsync sqlite/$$c/$$l/${LANGPAIR}.db ${INDEX_TMPDIR}/$$c-$$l-${LANGPAIR}.db; \
+	      echo "ATTACH DATABASE '${INDEX_TMPDIR}/$$c-$$l-${LANGPAIR}.db' as l; \
+		    ${INSERT_INTO} links SELECT * FROM l.links; \
+		    ${INSERT_INTO} linkedsource SELECT * FROM l.linkedsource; \
+		    ${INSERT_INTO} linkedtarget SELECT * FROM l.linkedtarget;" \
+	      | ${SQLITE3} ${TMP_LINK_DB}; \
+	      rm -f ${INDEX_TMPDIR}/$$c-$$l-${LANGPAIR}.db; \
+	      touch sqlite/$$c/$$l/${LANGPAIR}.merged; \
+	    else \
+	      echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"; \
+	      echo "!!!!!!!! PROBLEM WITH sqlite/$$c/$$l/${LANGPAIR}.db"; \
+	      echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"; \
+	    fi \
+	  fi )
 	@touch $@
 
 ## should we sync back each time a DB has been merged?
@@ -429,40 +483,6 @@ ${LINK_DB_LATEST_MERGED}: ${BITEXT_DB} ${TMP_LINK_DB}
 #	@rsync ${TMP_LINK_DB} ${LINK_DB}
 
 
-.PHONY: merge-latest-corpus-links
-merge-latest-corpus-links:
-	@for v in $(filter-out ${LATEST_VERSION},${MERGED_VERSIONS}); do \
-	  echo "remove links for $(CORPUS)/$$v/${LANGPAIR}"; \
-	  echo "ATTACH DATABASE '${BITEXT_DB}' as b;\
-		DELETE FROM links WHERE bitextID IN \
-			( SELECT DISTINCT rowid FROM b.bitexts WHERE corpus='${CORPUS}' AND version='$$v' ); \
-		DELETE FROM linkedsource WHERE bitextID IN \
-			( SELECT DISTINCT rowid FROM b.bitexts WHERE corpus='${CORPUS}' AND version='$$v' ); \
-		DELETE FROM linkedtarget WHERE bitextID IN \
-			( SELECT DISTINCT rowid FROM b.bitexts WHERE corpus='${CORPUS}' AND version='$$v' );" \
-	  | ${SQLITE3} ${TMP_LINK_DB}; \
-	  rm -f sqlite/$(CORPUS)/$$v/${LANGPAIR}.merged; \
-	done
-	@for v in $(filter-out ${MERGED_VERSIONS},${LATEST_VERSION} ${MERGED_VERSIONS}); do \
-	  echo "add links for $(CORPUS)/$$v/${LANGPAIR}"; \
-	  if [ ! -e sqlite/${CORPUS}/$$v/${LANGPAIR}.db ]; then \
-		${MAKE} sqlite/${CORPUS}/$$v/${LANGPAIR}.db; \
-	  fi; \
-	  if [ -e sqlite/${CORPUS}/$$v/${LANGPAIR}.db ]; then \
-	    rsync sqlite/${CORPUS}/$$v/${LANGPAIR}.db ${INDEX_TMPDIR}/${CORPUS}-$$v-${LANGPAIR}.db; \
-	    echo "ATTACH DATABASE '${INDEX_TMPDIR}/${CORPUS}-$$v-${LANGPAIR}.db' as l;\
-		  ${INSERT_INTO} links SELECT * FROM l.links;\
-		  ${INSERT_INTO} linkedsource SELECT * FROM l.linkedsource;\
-		  ${INSERT_INTO} linkedtarget SELECT * FROM l.linkedtarget;" \
-	    | ${SQLITE3} ${TMP_LINK_DB}; \
-	    rm -f ${INDEX_TMPDIR}/${CORPUS}-$$v-${LANGPAIR}.db; \
-	    touch sqlite/$(CORPUS)/$$v/${LANGPAIR}.merged; \
-	  else \
-	    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"; \
-	    echo "!!!!!!!! PROBLEM WITH sqlite/${CORPUS}/$$v/${LANGPAIR}.db"; \
-	    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"; \
-	  fi \
-	done
 
 
 
@@ -476,8 +496,6 @@ merge-latest-corpus-links:
 
 .PHONY: merge-all-linkdbs
 merge-all-linkdbs: ${LINK_DB_MERGED}
-
-MODIFY_DB_DUMP := sed 's/CREATE TABLE/${CREATE_TABLE}/;s/INSERT/INSERT OR IGNORE/;'
 
 ${LINK_DB_MERGED}: %.merged: %.db ${TMP_LINK_DB}
 	@mkdir -p $(dir ${INDEX_TMPDIR}/$<)
@@ -494,13 +512,11 @@ ${LINK_DB_MERGED}: %.merged: %.db ${TMP_LINK_DB}
 
 
 
-
-
-
-
 ##--------------------------------------------------------------------------------
 ## database of all bitexts and aligned corpra
 ## (copy from tables in alignment database)
+##
+## ?OBSOLETE? - bitext tables are also in the link database
 ##--------------------------------------------------------------------------------
 
 bitext-db: ${BITEXT_DB}

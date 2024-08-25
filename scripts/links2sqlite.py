@@ -51,8 +51,7 @@ linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_linkedtarget_sentid ON linked
 
 ## the original alignment table, now also with internal sentence IDs
 
-# linksDBcur.execute("""CREATE TABLE IF NOT EXISTS links ( linkID INTEGER NOT NULL PRIMARY KEY, bitextID, 
-linksDBcur.execute("""CREATE TABLE IF NOT EXISTS links ( linkID INTEGER, bitextID, 
+linksDBcur.execute("""CREATE TABLE IF NOT EXISTS links ( linkID INTEGER NOT NULL PRIMARY KEY, bitextID, 
                                                          srcIDs TEXT, trgIDs TEXT, srcSentIDs TEXT, trgSentIDs TEXT,
                                                          alignType TEXT, alignerScore REAL, cleanerScore REAL)""")
 linksDBcur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_links ON links ( bitextID, srcIDs, trgIDs )")
