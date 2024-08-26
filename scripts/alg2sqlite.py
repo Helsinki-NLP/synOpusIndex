@@ -161,5 +161,5 @@ for line in sys.stdin:
 con.close()
 if errorCount:
     print(f"Could not parse {errorCount} lines")
-    print(argv)
+    print(sys.argv)
     
