@@ -16,7 +16,8 @@ STORAGE_BASE = https://object.pouta.csc.fi/OPUS-
 
 CSC_PROJECT      := project_2000661
 HPC_MODULES      += allas parallel
-LOAD_STORAGE_ENV := module load allas && allas-conf -k ${CSC_PROJECT}
+ALLAS_CONF       := source /appl/opt/csc-cli-utils/allas-cli-utils/allas_conf -s
+LOAD_STORAGE_ENV := module load allas && ${ALLAS_CONF} -k ${CSC_PROJECT}
 
 
 ## language settings
@@ -32,6 +33,7 @@ LANGUAGE ?= ${SRCLANG}
 SCRIPTDIR    := scripts/
 INDEX_TMPDIR := ${TMPDIR}/index_tmp_${LANGPAIR}
 
+
 ## monolingual texts
 
 ALL_MONO_URLS      := $(patsubst %,https:%,$(shell find ${OPUSRELEASE}/ -name statistics.yaml | \
@@ -43,17 +45,9 @@ ALL_MONO_IDXDONE   := $(patsubst ${INDEX_TMPDIR}/%.idx,done/%.idx.done,${ALL_MON
 ALL_MONO_IDSDONE   := $(patsubst ${INDEX_TMPDIR}/%.idx,done/%.ids.done,${ALL_MONO_IDX})
 
 
-
-
-
-
 ## parallel texts
-## TODO: should the bitext table be included in the LINK_DB to avoid all those files?
 
-BITEXT_DB := sqlite/${LANGPAIR}.bitexts.db
-LINK_DB   := sqlite/${LANGPAIR}.db
-
-
+LINK_DB      := sqlite/${LANGPAIR}.db
 ALL_ALG_URLS := $(patsubst %,https:%,$(shell find ${OPUSRELEASE}/ -name statistics.yaml | \
 				xargs grep 'xml/${LANGPAIR}.xml.gz' | cut -f4 -d:))
 ALL_ALG_DONE := $(patsubst ${STORAGE_BASE}%.xml.gz,done/%.done,${ALL_ALG_URLS})
@@ -71,6 +65,7 @@ LINK_DB_LATEST_MERGED := $(sort $(shell echo "${LINK_DB_MERGED}" | tr ' ' "\n" |
 
 .PRECIOUS: 	${LANGUAGE}.db \
 		${LANGUAGE}.ids.db \
+		${LANGUAGE}.fts5.db \
 		${LANGUAGE}.idx.db \
 		${LANGPAIR}.db \
 		${LANGUAGE}.idx.gz \
@@ -112,11 +107,7 @@ all-links: ${LANGPAIR}.db
 .PHONY: linkdb
 linkdb: ${LINK_DB}
 
-linkdb-job:
-	${MAKE} HPC_CORES=4 THREADS=4 HPC_MEM=16g HPC_TIME=72:00 HPC_DISK=1000 linkdb.submit
 
-linkdb-largelang-job:
-	${MAKE} HPC_CORES=4 THREADS=4 HPC_MEM=16g HPC_TIME=72:00 HPC_DISK=2000 linkdb.submit
 
 old-linkdb: ${LANGPAIR}.linked.db
 
@@ -127,6 +118,14 @@ counts: ${LANGUAGE}.counts
 
 .PHONY: dedup
 dedup: ${LANGUAGE}.dedup.gz
+
+
+
+%-job:
+	${MAKE} HPC_CORES=4 THREADS=4 HPC_MEM=16g HPC_TIME=72:00 HPC_DISK=1000 $(@:-job=).submit
+
+%-largejob:
+	${MAKE} HPC_CORES=8 THREADS=8 HPC_MEM=32g HPC_TIME=72:00 HPC_DISK=3000 $(@:-largejob=).submit
 
 
 
@@ -145,37 +144,41 @@ tmp-dedup-fix:
 
 SWIFT_PARAMS = --use-slo --segment-size 5G --changed --skip-identical
 
-# STORAGE_FILES = ${LANGUAGE}.dedup.gz ${LANGUAGE}.db ${LANGUAGE}.idx.gz ${LANGUAGE}.idx.db ${LANGPAIR}.db
-STORAGE_FILES = ${LANGUAGE}.dedup.gz ${LANGUAGE}.db ${LANGUAGE}.ids.db ${LANGPAIR}.db
+STORAGE_FILES = ${LANGUAGE}.dedup.gz ${LANGUAGE}.db ${LANGUAGE}.ids.db ${LANGUAGE}.fts5.db ${LANGPAIR}.db sqlite
+
 
 .PHONY: upload
 upload:
-	which a-get
+	which a-put
 	${LOAD_STORAGE_ENV} && \
 	swift upload OPUS-index ${SWIFT_PARAMS} ${STORAGE_FILES}
 	rm -f index.txt
 	${MAKE} index.txt
-	find done -name '${LANGUAGE}.done' | xargs git add
+	find done -name '${LANGUAGE}.done' | xargs -n 500 git add
+	find done -name '${LANGPAIR}.done' | xargs -n 500 git add
+	find sqlite -name '${LANGPAIR}.merged' | xargs -n 500 git add
 	git add ${LANGUAGE}.counts index.txt
 
 
 .PHONY: upload-all
 upload-all:
-	which a-get
-	${LOAD_STORAGE_ENV} && swift upload OPUS-index ${SWIFT_PARAMS} *.dedup.gz *.db *.idx.gz
+	which a-put
+	${LOAD_STORAGE_ENV} && \
+	swift upload OPUS-index ${SWIFT_PARAMS} sqlite *.dedup.gz *.db
 	rm -f index.txt
 	${MAKE} index.txt
-	find done -name '*.done' | xargs git add
+	find done -name '*.done' | xargs -n 500 git add
+	find sqlite -name '*.merged' | xargs -n 500 git add
 	git add *.counts index.txt
 
 
 index.txt:
 	which a-get
-	${LOAD_STORAGE_ENV} && swift list OPUS-index | grep '\.dedup.gz$$' | \
+	swift list OPUS-index | grep '\.dedup.gz$$' | \
 		sed 's#^#https://object.pouta.csc.fi/OPUS-index/#' > $@
-	${LOAD_STORAGE_ENV} && swift list OPUS-index | grep '\.db$$'       | \
+	swift list OPUS-index | grep '\.db$$'       | \
 		sed 's#^#https://object.pouta.csc.fi/OPUS-index/#' >> $@
-	${LOAD_STORAGE_ENV} && swift list OPUS-index | grep '\.idx.gz$$'   | \
+	swift list OPUS-index | grep '\.idx.gz$$'   | \
 		sed 's#^#https://object.pouta.csc.fi/OPUS-index/#' >> $@
 
 
@@ -208,11 +211,11 @@ ${LANGUAGE}.counts: ${ALL_MONO_DONE}
 	${GZIP} -cd ${LANGUAGE}.dedup.gz | wc -lw |\
 	sed 's/^ *//;s/  */	/g' > $@
 
-counts-from-storage:
-	for l in aa ca cs de en es et eu fi fr ga nb nds nn no se sk sv; do \
-	  wget -qq -O - ${STORAGE_BASE}index/$$l.dedup.gz |\
-	  ${GZIP} -cd | wc -lw | sed 's/^ *//;s/  */	/g' > $$l.counts; \
-	done
+# counts-from-storage:
+# 	for l in aa ca cs de en es et eu fi fr ga nb nds nn no se sk sv; do \
+# 	  wget -qq -O - ${STORAGE_BASE}index/$$l.dedup.gz |\
+# 	  ${GZIP} -cd | wc -lw | sed 's/^ *//;s/  */	/g' > $$l.counts; \
+# 	done
 
 
 
@@ -519,6 +522,8 @@ ${LINK_DB_MERGED}: %.merged: %.db ${TMP_LINK_DB}
 ## ?OBSOLETE? - bitext tables are also in the link database
 ##--------------------------------------------------------------------------------
 
+BITEXT_DB := sqlite/${LANGPAIR}.bitexts.db
+
 bitext-db: ${BITEXT_DB}
 
 ${BITEXT_DB}: ${LANGPAIR}.db
@@ -799,6 +804,9 @@ retrieve:
 #	if [ -e ${STORED_FILE} ]; then \
 #	  rsync ${STORED_FILE} ${INDEX_TMPDIR}/${STORED_FILE}; \
 #	fi
+
+
+
 
 
 # retrieve: ${INDEX_TMPDIR}/${STORED_FILE}
