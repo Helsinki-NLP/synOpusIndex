@@ -92,7 +92,7 @@ all: ${LANGPAIR}.db
 	${MAKE} linkdb
 
 .PHONY: all-mono
-all-mono: ${LANGUAGE}.counts
+all-mono: stats/${LANGUAGE}.counts
 	${MAKE} ${LANGUAGE}.dedup.gz ${LANGUAGE}.db
 	${MAKE} ${LANGUAGE}.ids.db
 	${MAKE} ${LANGUAGE}.fts5.db
@@ -114,7 +114,7 @@ old-linkdb: ${LANGPAIR}.linked.db
 
 
 .PHONY: counts
-counts: ${LANGUAGE}.counts
+counts: stats/${LANGUAGE}.counts
 
 .PHONY: dedup
 dedup: ${LANGUAGE}.dedup.gz
@@ -157,7 +157,7 @@ upload:
 	find done -name '${LANGUAGE}.done' | xargs -n 500 git add
 	find done -name '${LANGPAIR}.done' | xargs -n 500 git add
 	find sqlite -name '${LANGPAIR}.merged' | xargs -n 500 git add
-	git add ${LANGUAGE}.counts index.txt
+	git add stats/${LANGUAGE}.counts index.txt
 
 
 .PHONY: upload-all
@@ -169,7 +169,7 @@ upload-all:
 	${MAKE} index.txt
 	find done -name '*.done' | xargs -n 500 git add
 	find sqlite -name '*.merged' | xargs -n 500 git add
-	git add *.counts index.txt
+	git add stats/*.counts index.txt
 
 
 index.txt:
@@ -184,9 +184,9 @@ index.txt:
 
 index-filesize.txt:
 	which a-get
-	${LOAD_STORAGE_ENV} && rclone ls allas:OPUS-index | grep  '\.dedup.gz$$'  > $@
-	${LOAD_STORAGE_ENV} && rclone ls allas:OPUS-index | grep  '\.db$$'       >> $@
-	${LOAD_STORAGE_ENV} && rclone ls allas:OPUS-index | grep  '\.idx.gz$$'   >> $@
+	rclone ls allas:OPUS-index | grep  '\.dedup.gz$$'  > $@
+	rclone ls allas:OPUS-index | grep  '\.db$$'       >> $@
+	rclone ls allas:OPUS-index | grep  '\.idx.gz$$'   >> $@
 
 
 
@@ -206,16 +206,12 @@ big-job-puhti:
 
 
 ## line (=sentence) count and word count
-${LANGUAGE}.counts: ${ALL_MONO_DONE}
+stats/${LANGUAGE}.counts: ${ALL_MONO_DONE}
+	mkdir -p stats
 	${MAKE} ${LANGUAGE}.dedup.gz
 	${GZIP} -cd ${LANGUAGE}.dedup.gz | wc -lw |\
 	sed 's/^ *//;s/  */	/g' > $@
 
-# counts-from-storage:
-# 	for l in aa ca cs de en es et eu fi fr ga nb nds nn no se sk sv; do \
-# 	  wget -qq -O - ${STORAGE_BASE}index/$$l.dedup.gz |\
-# 	  ${GZIP} -cd | wc -lw | sed 's/^ *//;s/  */	/g' > $$l.counts; \
-# 	done
 
 
 
