@@ -43,6 +43,12 @@ SRCLANG  := $(firstword $(subst -, ,${LANGPAIR}))
 TRGLANG  := $(lastword $(subst -, ,${LANGPAIR}))
 LANGUAGE ?= ${SRCLANG}
 
+# normalized 3-letter code (macro-language if available)
+SRCLANG3 := $(shell iso639 -n -m ${SRCLANG})
+TRGLANG3 := $(shell iso639 -n -m ${TRGLANG})
+LANG3    := $(shell iso639 -n -m ${LANGUAGE})
+
+
 
 ## directory with scripts and tools
 
@@ -75,12 +81,38 @@ LINK_DB_LATEST_MERGED := $(sort $(shell echo "${LINK_DB_MERGED}" | tr ' ' "\n" |
 
 
 
+# LANGUAGE_SENT_DB    := ${LANGUAGE}.db
+# LANGUAGE_FTS_DB     := ${LANGUAGE}.fts5.db
+# LANGUAGE_IDX_DB     := ${LANGUAGE}.ids.db
+# LANGUAGE_OLDIDX_DB  := ${LANGUAGE}.idx.db
+# SRCLANG_IDX_DB      := ${SRCLANG}.ids.db
+# TRGLANG_IDX_DB      := ${TRGLANG}.ids.db
+
+
+## use standardized 3-letter codes for language DBs
+
+LANGUAGE_SENT_DB    := ${LANG3}.db
+LANGUAGE_FTS_DB     := ${LANG3}.fts5.db
+LANGUAGE_IDX_DB     := ${LANG3}.ids.db
+LANGUAGE_OLDIDX_DB  := ${LANG3}.idx.db
+
+SRCLANG_IDX_DB      := ${SRCLANG3}.ids.db
+TRGLANG_IDX_DB      := ${TRGLANG3}.ids.db
+
+
+## FTS DB with original language code in OPUS
+
+ORIGINAL_LANGUAGE_SENT_DB := ${LANGUAGE}.db
+ORIGINAL_LANGUAGE_FTS_DB  := ${LANGUAGE}.fts5.db
+ORIGINAL_LANGUAGE_IDX_DB  := ${LANGUAGE}.ids.db
+
+
 ## files that we do not want to delete even if some kind of make target fails
 
-.PRECIOUS: 	${LANGUAGE}.db \
-		${LANGUAGE}.ids.db \
-		${LANGUAGE}.fts5.db \
-		${LANGUAGE}.idx.db \
+.PRECIOUS: 	${LANGUAGE_SENT_DB} \
+		${LANGUAGE_IDX_DB} \
+		${LANGUAGE_FTS_DB} \
+		${LANGUAGE_OLDIDX_DB} \
 		${LANGPAIR}.db \
 		${LANGUAGE}.idx.gz \
 		${LANGUAGE}.dedup.gz \
@@ -98,6 +130,26 @@ LINK_DB_LATEST_MERGED := $(sort $(shell echo "${LINK_DB_MERGED}" | tr ' ' "\n" |
 .INTERMEDIATE: ${ALL_MONO_IDX}
 
 
+OLD_LANG = nn
+OLD_LANGPAIRS = $(patsubst %.db,%,$(wildcard *-${OLD_LANG}.db ${OLD_LANG}-*.db))
+OLD_LANGPAIR = ${firstword ${OLD_LANGPAIRS}}
+
+redo-languages:
+	for l in bs sr hr nn nb no cmn zh zh_cn zh_tw zh_Hant pt_br; do \
+	  make OLD_LANG=$$l redo-all; \
+	done
+
+redo-all:
+	for p in ${OLD_LANGPAIRS}; do \
+	  make OLD_LANGPAIR=$$p redo; \
+	done
+
+redo:
+	rm ${OLD_LANGPAIR}.db
+	find sqlite -name ${OLD_LANGPAIR}.db -delete
+	find sqlite -name ${OLD_LANGPAIR}.merged -delete
+	find done -name '*${OLD_LANG}*.done' -delete
+	make LANGPAIR=${OLD_LANGPAIR} SKIP_FILE_RETRIEVAL=1 all
 
 
 
@@ -109,9 +161,9 @@ all: ${LANGPAIR}.db
 
 .PHONY: all-mono
 all-mono: stats/${LANGUAGE}.counts
-	${MAKE} ${LANGUAGE}.dedup.gz ${LANGUAGE}.db
-	${MAKE} ${LANGUAGE}.ids.db
-	${MAKE} ${LANGUAGE}.fts5.db
+	${MAKE} ${LANGUAGE}.dedup.gz ${LANGUAGE_SENT_DB}
+	${MAKE} ${LANGUAGE_IDX_DB}
+	${MAKE} ${LANGUAGE_FTS_DB}
 
 .PHONY: all-links
 all-links: ${LANGPAIR}.db
@@ -163,7 +215,7 @@ tmp-dedup-fix:
 
 SWIFT_PARAMS = --use-slo --segment-size 5G --changed --skip-identical
 
-STORAGE_FILES = ${LANGUAGE}.dedup.gz ${LANGUAGE}.db ${LANGUAGE}.ids.db ${LANGUAGE}.fts5.db ${LANGPAIR}.db sqlite
+STORAGE_FILES = ${LANGUAGE}.dedup.gz ${LANGUAGE_SENT_DB} ${LANGUAGE_IDX_DB} ${LANGUAGE_FTS_DB} ${LANGPAIR}.db sqlite
 
 
 .PHONY: upload
@@ -263,14 +315,14 @@ ${LANGUAGE}.dedup.gz: ${ALL_MONO_DONE}
 
 ## sqlite database of all sentences
 
-${LANGUAGE}.db: ${LANGUAGE}.dedup.gz
+${LANGUAGE_SENT_DB}: ${LANGUAGE}.dedup.gz
 	${MAKE} STORED_FILE=$@ retrieve
 	mkdir -p ${INDEX_TMPDIR}
 	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	${GZIP} -cd < $< | ${SCRIPTDIR}sent2sqlite.py ${INDEX_TMPDIR}/$@
 	mv -f ${INDEX_TMPDIR}/$@ $@
 	echo "PRAGMA journal_mode=WAL" | sqlite3 $@
-
+	-ln -s $@ ${ORIGINAL_LANGUAGE_SENT_DB}
 
 ## all sentences in all languages in one database
 
@@ -290,10 +342,8 @@ opus.db: $(filter-out bitexts.db opus.db %.ids.db %.fts5.db,\
 
 
 ## create a full-text search database from the sentence DB
-## TODO: fts5 DB should depend on sentence DB,
-##       but we don't want to redo dedup.gz and the sentence DB if not needed
 
-%.fts5.db: %.db
+${LANGUAGE_FTS_DB}: %.fts5.db: %.db
 	${MAKE} STORED_FILE=$@ retrieve
 	mkdir -p $(dir ${INDEX_TMPDIR}/$@)
 	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
@@ -301,7 +351,7 @@ opus.db: $(filter-out bitexts.db opus.db %.ids.db %.fts5.db,\
 	echo "ATTACH DATABASE '$(@:.fts5.db=.db)' as org; \
 	      ${INSERT_INTO} sentences SELECT * FROM org.sentences;" | sqlite3 ${INDEX_TMPDIR}/$@
 	mv -f ${INDEX_TMPDIR}/$@ $@
-
+	-ln -s $@ ${ORIGINAL_LANGUAGE_FTS_DB}
 
 
 
@@ -405,8 +455,8 @@ merge-latest-linkdbs: ${LINK_DB_LATEST_MERGED}
 ## --> this makes lookup much faster (assuming that the tmpdisk is a fast local disk)
 
 LINKDB_PREREQUISITES := ${INDEX_TMPDIR}/linkdb/${LANGPAIR}.db \
-			${INDEX_TMPDIR}/linkdb/${SRCLANG}.ids.db \
-			${INDEX_TMPDIR}/linkdb/${TRGLANG}.ids.db
+			${INDEX_TMPDIR}/linkdb/${SRCLANG_IDX_DB} \
+			${INDEX_TMPDIR}/linkdb/${TRGLANG_IDX_DB}
 
 .INTERMEDIATE: ${LINKDB_PREREQUISITES}
 ${LINKDB_PREREQUISITES}: ${INDEX_TMPDIR}/linkdb/%: %
@@ -599,33 +649,34 @@ bitexts.db: ${LANGPAIR_DBS}
 ## sentence index that maps corpus-specific indeces to the ID in the sentence DB
 ##------------------------------------------------------------------------------------
 
-sentence-index: ${LANGUAGE}.ids.db
+sentence-index: ${LANGUAGE_IDX_DB}
 
 
 TMP_SENTENCE_DB := ${INDEX_TMPDIR}/${LANGUAGE}-sentences.db
 .INTERMEDIATE: ${TMP_SENTENCE_DB}
 
-${LANGUAGE}.ids.db: ${ALL_MONO_IDSDONE}
-	if [ -e ${TMP_SENTENCE_DB} ]; then mv -f ${TMP_SENTENCE_DB} ${LANGUAGE}.db; fi
+${LANGUAGE_IDX_DB}: ${ALL_MONO_IDSDONE}
+	if [ -e ${TMP_SENTENCE_DB} ]; then mv -f ${TMP_SENTENCE_DB} ${LANGUAGE_SENT_DB}; fi
 	if [ -e ${INDEX_TMPDIR}/$@ ]; then mv -f ${INDEX_TMPDIR}/$@ $@; fi
+	-ln -s $@ ${ORIGINAL_LANGUAGE_IDX_DB}
 
 
 ## separate makefile targets for source and target language
 ## if necessary (i.e. LANGUAGE is not set to either language)
 
 ifneq (${LANGUAGE},${SRCLANG})
-${SRCLANG}.ids.db:
+${SRCLANG_IDX_DB}:
 	${MAKE} LANGUAGE=${SRCLANG} $@
 endif
 
 ifneq (${LANGUAGE},${TRGLANG})
-${TRGLANG}.ids.db:
+${TRGLANG_IDX_DB}:
 	${MAKE} LANGUAGE=${TRGLANG} $@
 endif
 
 
 
-${ALL_MONO_IDSDONE}: ${INDEX_TMPDIR}/${LANGUAGE}.ids.db ${TMP_SENTENCE_DB}
+${ALL_MONO_IDSDONE}: ${INDEX_TMPDIR}/${LANGUAGE_IDX_DB} ${TMP_SENTENCE_DB}
 	@echo "process $@"
 	@${SCRIPTDIR}sentid2sqlite.py \
 		-i $< \
@@ -639,8 +690,8 @@ ${ALL_MONO_IDSDONE}: ${INDEX_TMPDIR}/${LANGUAGE}.ids.db ${TMP_SENTENCE_DB}
 
 
 
-.INTERMEDIATE: ${INDEX_TMPDIR}/${LANGUAGE}.ids.db
-${INDEX_TMPDIR}/${LANGUAGE}.ids.db:
+.INTERMEDIATE: ${INDEX_TMPDIR}/${LANGUAGE_IDX_DB}
+${INDEX_TMPDIR}/${LANGUAGE_IDX_DB}:
 	${MAKE} STORED_FILE=$(notdir $@) retrieve
 	mkdir -p $(dir $@)
 	if [ -e $(notdir $@) ]; then rsync -av $(notdir $@) $@; fi
@@ -652,14 +703,14 @@ ${INDEX_TMPDIR}/${LANGUAGE}.ids.db:
 
 
 ifneq (${LANGUAGE},${SRCLANG})
-.INTERMEDIATE: ${INDEX_TMPDIR}/${SRCLANG}.ids.db
-${INDEX_TMPDIR}/${SRCLANG}.ids.db:
+.INTERMEDIATE: ${INDEX_TMPDIR}/${SRCLANG_IDX_DB}
+${INDEX_TMPDIR}/${SRCLANG_IDX_DB}:
 	${MAKE} LANGUAGE=${SRCLANG} $@
 endif
 
 ifneq (${LANGUAGE},${TRGLANG})
-.INTERMEDIATE: ${INDEX_TMPDIR}/${TRGLANG}.ids.db
-${INDEX_TMPDIR}/${TRGLANG}.ids.db:
+.INTERMEDIATE: ${INDEX_TMPDIR}/${TRGLANG_IDX_DB}
+${INDEX_TMPDIR}/${TRGLANG_IDX_DB}:
 	${MAKE} LANGUAGE=${TRGLANG} $@
 endif
 
@@ -667,7 +718,7 @@ endif
 
 ${TMP_SENTENCE_DB}:
 	mkdir -p $(dir $@)
-	rsync ${LANGUAGE}.db $@
+	rsync ${LANGUAGE_SENT_DB} $@
 
 
 
@@ -692,7 +743,7 @@ add-sentid-index: ${SENTIDS_DBS}
 ## --> this grows big quite quickly
 ##-------------------------------------------------------------------------
 
-${LANGUAGE}.idx.db: ${LANGUAGE}.idx.gz
+${LANGUAGE_OLDIDX_DB}: ${LANGUAGE}.idx.gz
 	${MAKE} STORED_FILE=$@ retrieve
 	mkdir -p $(dir ${INDEX_TMPDIR}/$@)
 	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
@@ -714,7 +765,7 @@ ${LANGUAGE}.idx.gz: ${ALL_MONO_IDXDONE}
 	else \
 	  find ${INDEX_TMPDIR} -name '*.idx' | xargs cat | ${GZIP} -c > $@; \
 	fi
-	if [ -e ${TMP_SENTENCE_DB} ]; then rsync ${TMP_SENTENCE_DB} ${LANGUAGE}.db; fi
+	if [ -e ${TMP_SENTENCE_DB} ]; then rsync ${TMP_SENTENCE_DB} ${LANGUAGE_SENT_DB}; fi
 
 ## create temporary index files for a specific corpus
 
@@ -761,7 +812,7 @@ ${LANGUAGE}-new.idx.db:
 	echo "CREATE UNIQUE INDEX idx_sentids ON sentids ( docID, sentID)" | sqlite3 $@
 	echo "${SENTINDEX_VIEW}" | sqlite3 $@
 	echo "${SENTINDEX_INSERT_TRIGGER}" | sqlite3 $@
-	sqlite3 ${LANGUAGE}.idx.db ".dump sentindex" | sqlite3 $@ >$@.out 2>$@.err
+	sqlite3 ${LANGUAGE_OLDIDX_DB} ".dump sentindex" | sqlite3 $@ >$@.out 2>$@.err
 
 ##---------------------------------
 ## end of temporary fix to map old index to new format
@@ -834,9 +885,9 @@ ${INDEX_TMPDIR}/%.dedup:
 	rm -f $@.txt.gz
 
 ${ALL_MONO_DONE}: done/%.done: ${INDEX_TMPDIR}/%.dedup
-	if [ -e ${LANGUAGE}.db ]; then \
+	if [ -e ${LANGUAGE_SENT_DB} ]; then \
 	  if [ -s $< ]; then \
-	    cat $< | ${SCRIPTDIR}sent2sqlite.py ${LANGUAGE}.db; \
+	    cat $< | ${SCRIPTDIR}sent2sqlite.py ${LANGUAGE_SENT_DB}; \
 	  fi \
 	fi
 	mkdir -p $(dir $@)
@@ -850,12 +901,14 @@ ${ALL_MONO_DONE}: done/%.done: ${INDEX_TMPDIR}/%.dedup
 ## and sync it to the temporary file location as well
 
 retrieve:
+ifneq (${SKIP_FILE_RETRIEVAL},1)
 	@if [ ! -e ${STORED_FILE} ]; then \
 	  if [ `grep '${STORED_FILE}' index.txt | wc -l` -gt 0 ]; then \
 	    echo "download ${STORED_FILE}"; \
 	    wget -qq ${STORAGE_BASE}index/${STORED_FILE}; \
 	  fi \
 	fi
+endif
 
 
 
