@@ -3,10 +3,13 @@
 import sys
 import sqlite3
 
-con = sqlite3.connect(sys.argv[1])
+dbfile = sys.argv[1]
+con = sqlite3.connect(dbfile, timeout=7200)
 cur = con.cursor()
-
 cur.execute("CREATE TABLE IF NOT EXISTS sentences ( sentence TEXT UNIQUE PRIMARY KEY NOT NULL )")
+con.commit()
+cur.close()
+
 
 buffer = []
 buffersize = 100000
@@ -19,8 +22,11 @@ while True:
             break
         buffer.append(tuple([line.rstrip()]))
         if len(buffer) >= buffersize:
+            con = sqlite3.connect(dbfile, timeout=7200)
+            cur = con.cursor()
             cur.executemany("""INSERT OR IGNORE INTO sentences VALUES(?)""", buffer)
             con.commit()
+            cur.close()
             buffer = []
         
             bufferCount += 1
@@ -49,5 +55,8 @@ while True:
 
 
 if len(buffer) > 0:
+    con = sqlite3.connect(dbfile, timeout=7200)
+    cur = con.cursor()
     cur.executemany("""INSERT OR IGNORE INTO sentences VALUES(?)""", buffer)
     con.commit()
+    cur.close()

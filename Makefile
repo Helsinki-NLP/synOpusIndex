@@ -12,6 +12,22 @@ include Makefile.def
 include Makefile.submit
 
 
+###############################################################
+## temporary targets for adding bitext ranges
+###############################################################
+
+BITEXT_RANGE := $(patsubst %.db,%.bitextrange,$(wildcard sqlite/*.db) $(wildcard sqlite/*/*/*.db))
+
+bitext-ranges: ${BITEXT_RANGE}
+
+sqlite/%.bitextrange: sqlite/%.db
+	${SCRIPTDIR}add_bitext_range.py $<
+
+###############################################################
+###############################################################
+
+
+
 STORAGE_BASE = https://object.pouta.csc.fi/OPUS-
 
 CSC_PROJECT      := project_2000661
@@ -59,8 +75,6 @@ LINK_DB_LATEST_MERGED := $(sort $(shell echo "${LINK_DB_MERGED}" | tr ' ' "\n" |
 
 
 
-
-
 ## files that we do not want to delete even if some kind of make target fails
 
 .PRECIOUS: 	${LANGUAGE}.db \
@@ -85,6 +99,8 @@ LINK_DB_LATEST_MERGED := $(sort $(shell echo "${LINK_DB_MERGED}" | tr ' ' "\n" |
 
 
 
+
+
 .PHONY: all
 all: ${LANGPAIR}.db
 	${MAKE} LANGUAGE=${SRCLANG} all-mono
@@ -102,11 +118,14 @@ all-links: ${LANGPAIR}.db
 	${MAKE} ${LINK_DB}
 
 
-
-
 .PHONY: linkdb
 linkdb: ${LINK_DB}
 
+
+HPLT_LANGPAIRS = ar-en bs-en ca-en en-et en-eu en-fi en-ga en-gl en-hi en-hr en-is en-mk en-mt en-nn en-sq en-sr en-sw en-zh_Hant cmn_Hant-en cmn-en
+
+hplt-all:
+	for l in ${HPLT_LANGPAIRS}; do ${MAKE} LANGPAIR=$$l all; done
 
 
 old-linkdb: ${LANGPAIR}.linked.db
@@ -246,13 +265,28 @@ ${LANGUAGE}.dedup.gz: ${ALL_MONO_DONE}
 
 ${LANGUAGE}.db: ${LANGUAGE}.dedup.gz
 	${MAKE} STORED_FILE=$@ retrieve
-	mkdir -p $(dir ${INDEX_TMPDIR}/$@)
+	mkdir -p ${INDEX_TMPDIR}
 	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	${GZIP} -cd < $< | ${SCRIPTDIR}sent2sqlite.py ${INDEX_TMPDIR}/$@
 	mv -f ${INDEX_TMPDIR}/$@ $@
 	echo "PRAGMA journal_mode=WAL" | sqlite3 $@
 
 
+## all sentences in all languages in one database
+
+opus.db: $(filter-out bitexts.db opus.db %.ids.db %.fts5.db,\
+		$(filter-out $(wildcard *-*.db),$(wildcard *.db)))
+	mkdir -p ${INDEX_TMPDIR}
+	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
+	echo "${CREATE_TABLE} sentences ( sentence TEXT UNIQUE PRIMARY KEY NOT NULL )" \
+	| sqlite3 ${INDEX_TMPDIR}/$@
+	for d in $^; do \
+	  echo "processing $$d"; \
+	  rsync $$d ${INDEX_TMPDIR}/$$d; \
+	  sqlite3 ${INDEX_TMPDIR}/$$d ".dump sentences" | ${MODIFY_DB_DUMP} | sqlite3 ${INDEX_TMPDIR}/$@; \
+	  rm -f ${INDEX_TMPDIR}/$$d; \
+	done
+	rsync ${INDEX_TMPDIR}/$@ $@
 
 
 ## create a full-text search database from the sentence DB
@@ -348,6 +382,8 @@ ${LINK_DB}: ${LANGPAIR}.db ${ALL_LINK_DBS}
 	sqlite3 ${LANGPAIR}.db ".dump aligned_corpora" | ${MODIFY_DB_DUMP} | sqlite3 $@
 	echo "${CREATE_UNIQUE_INDEX} idx_bitexts ON bitexts (corpus,version,fromDoc,toDoc)" | sqlite3 $@
 	echo "${CREATE_UNIQUE_INDEX} idx_corpora ON aligned_corpora (corpus,version)" | sqlite3 $@
+	${SCRIPTDIR}add_bitext_range.py $@
+	${SCRIPTDIR}add_corpus_range.py $@
 
 
 ## phony target to merge link tables from each corpus
@@ -486,6 +522,7 @@ ${LINK_DB_LATEST_MERGED}: ${TMP_LINK_DB}
 
 
 
+
 ## OBSOLETE ##
 ##
 ## 2.2a: merge all individual link databases with the global link DB in tmp dir
@@ -533,6 +570,30 @@ ${BITEXT_DB}: ${LANGPAIR}.db
 	mv -f $@.tmp $@
 
 
+LANGPAIR_DBS = $(wildcard *-*.db)
+
+bitexts.db: ${LANGPAIR_DBS}
+	echo "${CREATE_TABLE} bitexts ( bitextID, corpus TEXT, version TEXT, fromDoc TEXT, toDoc TEXT, \
+                                        srclang TEXT, trglang TEXT, srclang3 TEXT, trglang3 TEXT )" \
+		| sqlite3 $@
+	echo "${CREATE_UNIQUE_INDEX} idx_bitexts ON bitexts ( corpus, version, fromDoc, toDoc, \
+                                                              srclang, trglang, srclang3, trglang3 )" \
+		| sqlite3 $@
+	echo "${CREATE_UNIQUE_INDEX} idx_bitext_ids ON bitexts ( bitextID, srclang, trglang )" | sqlite3 $@
+	echo "${CREATE_INDEX} idx_langpair ON bitexts ( srclang, trglang )" | sqlite3 $@
+	echo "${CREATE_INDEX} idx_langpair3 ON bitexts ( srclang3, trglang3 )" | sqlite3 $@
+	echo "${CREATE_INDEX} idx_corpus ON bitexts ( corpus, version )" | sqlite3 $@
+	for d in $^; do \
+	  s=`echo $$d | cut -f1 -d-`; \
+	  t=`echo $$d | cut -f2 -d- | cut -f1 -d.`; \
+	  S=`iso639 -n -m $$s`; \
+	  T=`iso639 -n -m $$t`; \
+	  echo "$$s $$t $$S $$T"; \
+	  echo "ATTACH DATABASE '$$d' as l; \
+	        ${INSERT_INTO} bitexts SELECT rowid, corpus, version, fromDoc, toDoc,\
+                                              '$$s','$$t','$$S','$$T' FROM l.bitexts;" \
+	  | sqlite3 $@; \
+	done
 
 ##------------------------------------------------------------------------------------
 ## sentence index that maps corpus-specific indeces to the ID in the sentence DB
@@ -771,14 +832,13 @@ ${INDEX_TMPDIR}/%.dedup:
 	wget -qq -O $@.txt.gz $(patsubst ${INDEX_TMPDIR}/%.dedup,${STORAGE_BASE}%.txt.gz,$@)
 	${GZIP} -cd < $@.txt.gz | ${FIX_UNICODE} | ${SORT} -u  > $@
 	rm -f $@.txt.gz
-	if [ -e $(notdir $(@:.dedup=.db)) ]; then \
-	  if [ -s $@ ]; then \
-	    cat $@ | ${SCRIPTDIR}sent2sqlite.py $(notdir $(@:.dedup=.db)); \
-	  fi \
-	fi
-
 
 ${ALL_MONO_DONE}: done/%.done: ${INDEX_TMPDIR}/%.dedup
+	if [ -e ${LANGUAGE}.db ]; then \
+	  if [ -s $< ]; then \
+	    cat $< | ${SCRIPTDIR}sent2sqlite.py ${LANGUAGE}.db; \
+	  fi \
+	fi
 	mkdir -p $(dir $@)
 	touch $@
 
@@ -796,28 +856,9 @@ retrieve:
 	    wget -qq ${STORAGE_BASE}index/${STORED_FILE}; \
 	  fi \
 	fi
-#	mkdir -p ${INDEX_TMPDIR}
-#	if [ -e ${STORED_FILE} ]; then \
-#	  rsync ${STORED_FILE} ${INDEX_TMPDIR}/${STORED_FILE}; \
-#	fi
 
 
 
-
-
-# retrieve: ${INDEX_TMPDIR}/${STORED_FILE}
-
-# ${INDEX_TMPDIR}/${STORED_FILE}:
-# 	mkdir -p ${INDEX_TMPDIR}
-# 	if [ ! -e ${STORED_FILE} ]; then \
-# 	  if [ `grep '${STORED_FILE}' index.txt | wc -l` -gt 0 ]; then \
-# 	    echo "download ${STORED_FILE}"; \
-# 	    wget -qq ${STORAGE_BASE}index/${STORED_FILE}; \
-# 	  fi \
-# 	fi
-# 	if [ -e ${STORED_FILE} ]; then \
-# 	  rsync ${STORED_FILE} $@; \
-# 	fi
 
 
 

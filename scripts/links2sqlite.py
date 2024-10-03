@@ -57,7 +57,7 @@ linksDBcur.execute("""CREATE TABLE IF NOT EXISTS links ( linkID INTEGER NOT NULL
 linksDBcur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_links ON links ( bitextID, srcIDs, trgIDs )")
 linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_aligntype ON links ( bitextID, alignType )")
 linksDBcur.execute("CREATE INDEX IF NOT EXISTS idx_bitextid ON links ( bitextID )")
-
+linksDBcur.execute("CREATE TABLE IF NOT EXISTS bitext_range (bitextID INTEGER NOT NULL PRIMARY KEY,start INTEGER,end INTEGER)")
 
 
 linksDBcur.close()
@@ -100,7 +100,24 @@ def insert_links():
         linksDBcur.close()
         srcbuffer = []
         trgbuffer = []
-        linkbuffer = []        
+        linkbuffer = []
+
+
+
+def insert_range(bitextID):
+    global linkDB
+    linksDBcon = sqlite3.connect(linkDB, timeout=7200)
+    linksDBcur = linksDBcon.cursor()
+
+    for rowids in linksDBcur.execute(f"SELECT MIN(rowid),MAX(rowid) FROM links WHERE bitextID={bitextID}"):
+        start = rowids[0]
+        end = rowids[1]
+        if start and end:
+            linksDBcur.execute(f"INSERT OR IGNORE INTO bitext_range VALUES ({bitextID},{start},{end})")
+        
+    linksDBcon.commit()
+    linksDBcur.close()
+
 
 
 #----------------------------------------------------------------
@@ -177,8 +194,11 @@ for bitext in bitextDBcur.execute(f"SELECT rowid,fromDoc,toDoc FROM bitexts WHER
         if len(srcbuffer) >= buffersize or len(trgbuffer) >= buffersize:
             insert_links()
 
+    insert_links()
+    insert_range(bitextID)
 
-# final insert if necessary
+
+# final insert if necessary (should not be necessary)
 insert_links()
 
 
