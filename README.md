@@ -9,16 +9,16 @@ Various ways of indexing OPUS data. Index files can be used to retrieve sentence
 Sentences are indexed per language using this procedure:
 
 * extract all sentences from monolingual OPUS releases, sort and merge them into `xx.dedup.gz` files
-* dump the sorted sentences into a database `xx.db`
-* create an index file that maps sentence IDs in that database to sentenceIDs in OPUS corpora (`xx.ids.db`)
+* dump the sorted sentences into a database `xxx.db`
+* create an index file that maps sentence IDs in that database to sentenceIDs in OPUS corpora (`xxx.ids.db`)
 
 The last step may add sentences to the sentence DB if they are missing in the list extracted in step 1.
-The tables are stored in different files because queries are faster when different files can be opened and each of them has its own cache.
+The tables are stored in different files because queries are faster when different files can be opened and each of them has its own cache. Note that `xxx` refers to three-letter ISO-639-3 language codes (using macro-language codes if available) whereas `xx` refers to the original language codes used in OPUS.
 
-Optionally, one can also create a full-text-search index over sentences in yet another database `xx.fts5.db`.
+Optionally, one can also create a full-text-search index over sentences in yet another database `xxx.fts5.db`.
 
 
-### Sentence DB `xx.db`
+### Sentence DB `xxx.db`
 
 * Table `sentences`
 
@@ -32,7 +32,7 @@ Optionally, one can also create a full-text-search index over sentences in yet a
 
 
 
-### Sentence index DB `xx.ids.db`
+### Sentence index DB `xxx.ids.db`
 
 * Table `documents`:
 
@@ -62,7 +62,7 @@ There is also a view `sentindex` defined over an inner join between the tables `
 
 
 
-### Full-text-search DB `xx.fts5.db`
+### Full-text-search DB `xxx.fts5.db`
 
 This database has the same structure as the sentence DB but uses the FTS5 extension of SQLite to enable full-text search over sentences. This is useful for querying the data with advanced and efficient search queries (see https://www.sqlitetutorial.net/sqlite-full-text-search/).
 
@@ -151,6 +151,20 @@ There are also indivudual link DB's for each corpus release. They are stored in 
 | bitextID     | INTEGER        |
 
 `(sentID,linkID)` is used as a unique primary key.
+
+
+
+* Table `bitexts`:
+
+This is basically a copy of the same table from the bitext alignment DB `xx-yy.db` above.
+
+| column      | type           |
+|-------------|----------------|
+| rowid       | INTEGER UNIQUE |
+| corpus      | TEXT           |
+| version     | TEXT           |
+| fromDoc     | TEXT           |
+| toDoc       | TEXT           |
 
 
 

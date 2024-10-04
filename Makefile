@@ -44,11 +44,33 @@ TRGLANG  := $(lastword $(subst -, ,${LANGPAIR}))
 LANGUAGE ?= ${SRCLANG}
 
 # normalized 3-letter code (macro-language if available)
-SRCLANG3 := $(shell iso639 -n -m ${SRCLANG})
-TRGLANG3 := $(shell iso639 -n -m ${TRGLANG})
-LANG3    := $(shell iso639 -n -m ${LANGUAGE})
+SRCLANG3  := $(shell iso639 -n -m ${SRCLANG})
+TRGLANG3  := $(shell iso639 -n -m ${TRGLANG})
+LANG3     := $(shell iso639 -n -m ${LANGUAGE})
+LANGPAIR3 := $(firstword $(sort ${SRCLANG3} ${TRGLANG3}))-$(lastword $(sort ${SRCLANG3} ${TRGLANG3}))
 
 
+iso-linkdb: sqlite/${LANGPAIR3}.db
+
+sqlite/${LANGPAIR3}.db:
+	if [ ${LANGPAIR3} != ${SRCLANG}-${TRGLANG} ]; then \
+	  if [ ! -e $@ ]; then \
+	    if [ ${LANGPAIR3} == ${SRCLANG3}-${TRGLANG3} ]; then \
+	      echo "cd sqlite && ln -s ${LANGPAIR}.db ${LANGPAIR3}.db"; \
+	    fi \
+	  elif [ -l $@ ]; then \
+	    if [ `readlink $@` == ${LANGPAIR}.db ]; then \
+	      echo "$@ is already linked to ${LANGPAIR}.db"; \
+	    else \
+	      l=`readlink $@`; \
+	      echo "rm -f $@"; \
+	      echo "cp sqlite/$$l $@"; \
+	      echo "linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}"; \
+	    fi \
+	  else \
+	    echo "linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}"; \
+	  fi \
+	fi
 
 ## directory with scripts and tools
 
@@ -70,6 +92,7 @@ ALL_MONO_IDSDONE   := $(patsubst ${INDEX_TMPDIR}/%.idx,done/%.ids.done,${ALL_MON
 ## parallel texts
 
 LINK_DB      := sqlite/${LANGPAIR}.db
+ISO_LINK_DB  := sqlite/${LANGPAIR3}.db
 ALL_ALG_URLS := $(patsubst %,https:%,$(shell find ${OPUSRELEASE}/ -name statistics.yaml | \
 				xargs grep 'xml/${LANGPAIR}.xml.gz' | cut -f4 -d:))
 ALL_ALG_DONE := $(patsubst ${STORAGE_BASE}%.xml.gz,done/%.done,${ALL_ALG_URLS})
@@ -168,19 +191,18 @@ all-mono: stats/${LANGUAGE}.counts
 .PHONY: all-links
 all-links: ${LANGPAIR}.db
 	${MAKE} ${LINK_DB}
+	${MAKE} ${ISO_LINK_DB}
 
 
 .PHONY: linkdb
 linkdb: ${LINK_DB}
+	${MAKE} ${ISO_LINK_DB}
 
 
 HPLT_LANGPAIRS = ar-en bs-en ca-en en-et en-eu en-fi en-ga en-gl en-hi en-hr en-is en-mk en-mt en-nn en-sq en-sr en-sw en-zh_Hant cmn_Hant-en cmn-en
 
 hplt-all:
 	for l in ${HPLT_LANGPAIRS}; do ${MAKE} LANGPAIR=$$l all; done
-
-
-old-linkdb: ${LANGPAIR}.linked.db
 
 
 
@@ -403,6 +425,46 @@ ${ALL_ALG_DONE}: ${INDEX_TMPDIR}/${LANGPAIR}.db
 
 
 
+
+##--------------------------------------------------------------------------------
+## move link DBs to ISO639-3 language codes
+## --> need to merge several link DBs if the match the same macro-language codes
+## --> need to also reverse link direction if the new language codes are ordered differently
+## --> scripts/linkdb2iso639_3.py takes care of all that (only if we have more than lang pair)
+##--------------------------------------------------------------------------------
+
+sqlite/${LANGPAIR}.merged: ${LINK_DB}
+	touch $@
+
+${ISO_LINK_DB}: sqlite/${LANGPAIR}.merged
+	@if [ ${LANGPAIR3} != ${SRCLANG}-${TRGLANG} ]; then \
+	  if [ ! -e $@ ]; then \
+	    if [ ${LANGPAIR3} == ${SRCLANG3}-${TRGLANG3} ]; then \
+	      echo "cd sqlite && ln -s ${LANGPAIR}.db ${LANGPAIR3}.db"; \
+	      cd sqlite && ln -s ${LANGPAIR}.db ${LANGPAIR3}.db; \
+	    else \
+	      echo "scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}"; \
+	      scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}; \
+	    fi \
+	  elif [ -L $@ ]; then \
+	    if [ `readlink $@` == ${LANGPAIR}.db ]; then \
+	      echo "$@ is already linked to ${LANGPAIR}.db"; \
+	    else \
+	      l=`readlink $@`; \
+	      echo "rm -f $@; cp sqlite/$$l $@"; \
+	      echo "scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}"; \
+	      rm -f $@; \
+	      cp sqlite/$$l $@; \
+	      L=`echo $$l | sed 's/\.db$$//'`; \
+	      echo "CREATE TABLE IF NOT EXISTS langpairs (langpair TEXT NOT NULL PRIMARY KEY)" | sqlite3 $@; \
+	      echo "INSERT OR IGNORE INTO langpairs VALUES ('$$L')" | sqlite3 $@; \
+	      scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}; \
+	    fi \
+	  else \
+	    echo "scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}"; \
+	    scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}; \
+	  fi \
+	fi
 
 
 
