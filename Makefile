@@ -50,28 +50,6 @@ LANG3     := $(shell iso639 -n -m ${LANGUAGE})
 LANGPAIR3 := $(firstword $(sort ${SRCLANG3} ${TRGLANG3}))-$(lastword $(sort ${SRCLANG3} ${TRGLANG3}))
 
 
-iso-linkdb: sqlite/${LANGPAIR3}.db
-
-sqlite/${LANGPAIR3}.db:
-	if [ ${LANGPAIR3} != ${SRCLANG}-${TRGLANG} ]; then \
-	  if [ ! -e $@ ]; then \
-	    if [ ${LANGPAIR3} == ${SRCLANG3}-${TRGLANG3} ]; then \
-	      echo "cd sqlite && ln -s ${LANGPAIR}.db ${LANGPAIR3}.db"; \
-	    fi \
-	  elif [ -l $@ ]; then \
-	    if [ `readlink $@` == ${LANGPAIR}.db ]; then \
-	      echo "$@ is already linked to ${LANGPAIR}.db"; \
-	    else \
-	      l=`readlink $@`; \
-	      echo "rm -f $@"; \
-	      echo "cp sqlite/$$l $@"; \
-	      echo "linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}"; \
-	    fi \
-	  else \
-	    echo "linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}"; \
-	  fi \
-	fi
-
 ## directory with scripts and tools
 
 SCRIPTDIR    := scripts/
@@ -139,7 +117,8 @@ ORIGINAL_LANGUAGE_IDX_DB  := ${LANGUAGE}.ids.db
 		${LANGPAIR}.db \
 		${LANGUAGE}.idx.gz \
 		${LANGUAGE}.dedup.gz \
-		${LINK_DB}
+		${LINK_DB} \
+		${ISO_LINK_DB}
 
 
 ## files that we want to keep even if they are only build as pre-requisites in implicit rules
@@ -198,6 +177,8 @@ all-links: ${LANGPAIR}.db
 linkdb: ${LINK_DB}
 	${MAKE} ${ISO_LINK_DB}
 
+.PHONY: iso-linkdb
+iso-linkdb: ${ISO_LINK_DB}
 
 HPLT_LANGPAIRS = ar-en bs-en ca-en en-et en-eu en-fi en-ga en-gl en-hi en-hr en-is en-mk en-mt en-nn en-sq en-sr en-sw en-zh_Hant cmn_Hant-en cmn-en
 
@@ -947,11 +928,17 @@ ${INDEX_TMPDIR}/%.dedup:
 	rm -f $@.txt.gz
 
 ${ALL_MONO_DONE}: done/%.done: ${INDEX_TMPDIR}/%.dedup
-	if [ -e ${LANGUAGE_SENT_DB} ]; then \
-	  if [ -s $< ]; then \
-	    cat $< | ${SCRIPTDIR}sent2sqlite.py ${LANGUAGE_SENT_DB}; \
-	  fi \
-	fi
+##
+## immediately add sentences to the sentence DB
+## --> this is too slow on shared filesystems
+## --> but we can't copy and sync back as this may break concurrent tasks
+## --> skip this and hope that the job does not stop prematurely
+##
+#	if [ -e ${LANGUAGE_SENT_DB} ]; then \
+#	  if [ -s $< ]; then \
+#	    cat $< | ${SCRIPTDIR}sent2sqlite.py ${LANGUAGE_SENT_DB}; \
+#	  fi \
+#	fi
 	mkdir -p $(dir $@)
 	touch $@
 
