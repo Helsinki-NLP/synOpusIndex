@@ -1,11 +1,27 @@
 # -*-makefile-*-
-#--------------------------------------------------------------------
-# Joerg Tiedemann			2017-06-07
-# tiedeman@gmail.com
-#
-# generic target to submit a job via sbatch
-# works on CSC only so far
-#--------------------------------------------------------------------
+
+SHELL := bash
+
+
+
+CSC_PROJECT := project_2000661
+
+# job-specific settings (overwrite if necessary)
+# HPC_EXTRA: additional SBATCH commands
+
+HPC_MEM     = 4g
+HPC_TIME    = 72:00
+HPC_NODES   = 1
+HPC_CORES   = 1
+HPC_QUEUE   = small
+HPC_MODULES = allas parallel git
+HPC_EXTRA   =
+
+
+
+
+ALLAS_CONF       := source /appl/opt/csc-cli-utils/allas-cli-utils/allas_conf -s
+LOAD_STORAGE_ENV := module load allas && ${ALLAS_CONF} -k ${CSC_PROJECT}
 
 
 # enable e-mail notification by setting EMAIL
@@ -16,20 +32,43 @@ ifeq ("$(WHOAMI)","tiedeman")
 endif
 
 
-# job-specific settings (overwrite if necessary)
-# HPC_EXTRA: additional SBATCH commands
+ifeq (${shell hostname --domain 2>/dev/null},bullx)
+  HPC_HOST = puhti
+endif
 
-HPC_MEM     = 4g
-HPC_TIME    = 48:00
-HPC_NODES   = 1
-HPC_CORES   = 1
-HPC_QUEUE   = small
-# HPC_MODULES = nlpl-opus python-env/3.4.1 
-# HPC_MODULES = parallel python-env nlpl-efmaral nlpl-opus nlpl-moses 
-# HPC_MODULES = parallel python-env nlpl-efmaral nlpl-moses
-# HPC_MODULES = parallel git nlpl-cwb nlpl-opus nlpl-moses
-HPC_MODULES = parallel git nlpl-cwb nlpl-moses
-HPC_EXTRA   =
+
+## scratch/work space
+
+ifneq (${wildcard /scratch/${CSC_PROJECT}/tmp},)
+  TMPDIR := /scratch/${CSC_PROJECT}/tmp
+endif
+
+TMPDIR ?= /tmp
+
+ifdef LOCAL_SCRATCH
+  TMPDIR := ${LOCAL_SCRATCH}
+endif
+
+WORKDIR ?= ${TMPDIR}
+
+CORES    := ${shell nproc}
+THREADS  ?= $(shell if [ `hostname | grep login | wc -l` -gt 0 ]; then echo 4; else echo ${CORES}; fi )
+GZIP     := ${shell which pigz 2>/dev/null || echo gzip}
+GZCAT    := ${GZIP} -cd
+ZCAT     := gzip -cd
+SORT     := sort -T ${TMPDIR} -S1G --parallel=${THREADS}
+UNIQ     := ${SORT} -u
+MERGE    := ${SORT} -m -u
+
+## seems to be necessary to run with threads on HPC nodes
+## (nproc is not reliable?)
+ifneq (${GZIP},gzip)
+  GZIP += -p ${THREADS}
+endif
+
+PARALLEL_ARGS := --max-procs 25% --pipe --keep-order -q
+PARALLEL := ${shell if [ `which parallel 2>/dev/null | wc -l` -gt 0 ]; then echo 'parallel ${PARALLEL_ARGS}'; fi }
+
 
 
 
@@ -71,39 +110,12 @@ endif
 	sbatch ${SBATCH_ARGS} $@
 	mv $@ $@-${shell date "+%Y-%m-%d"}
 
-#	echo 'module purge' >> $@
+
+%-job:
+	${MAKE} HPC_CORES=4 THREADS=4 HPC_MEM=16g HPC_TIME=72:00 HPC_DISK=1000 $(@:-job=).submit
+
+%-largejob:
+	${MAKE} HPC_CORES=8 THREADS=8 HPC_MEM=32g HPC_TIME=72:00 HPC_DISK=3000 $(@:-largejob=).submit
 
 
-## run in a local tmp dir instead
-## --> reduce I/O! but requires massive copying ...
-## --> requires enough space in TMPDIR!
-## TODO: should we use --ignore-errors in make call?
-%-local:
-	mkdir -p ${TMPDIR}/OPUS/corpus/${CORPUS}
-	-rsync ${OPUSCORPORA}/Makefile* ${TMPDIR}/OPUS/corpus/
-	-ln -s ${OPUSTOOLS} ${TMPDIR}/OPUS/tools
-	-rsync -av ${CORPUSHOME} ${TMPDIR}/OPUS/corpus/
-	-${MAKE} -C $(patsubst ${OPUSHOME}%,${TMPDIR}/OPUS%,${PWD}) \
-		--keep-going \
-		OPUSHOME=${TMPDIR}/OPUS ${@:-local=}
-	-rsync -zav ${TMPDIR}/OPUS/corpus/${CORPUS} ${OPUSHOME}/corpus/
-	-rsync -zav ${TMPDIR}/OPUS/web/${CORPUS} ${OPUSHOME}/web/
-	-rsync -zav ${TMPDIR}/OPUS/web/${CORPUS}*php ${OPUSHOME}/web/
-	-rm -fr ${TMPDIR}/OPUS/corpus/${CORPUS}
-	-rm -fr ${TMPDIR}/OPUS/web/${CORPUS}*
-
-
-
-# run a recipe on a local copy in TMPDIR
-# NOTE: may overwrite existing files
-#       when copying back!!!
-
-%-runlocal:
-	mkdir -p ${TMPDIR}/OPUS/corpus
-	rsync -a ${CORPUSHOME} ${TMPDIR}/OPUS/corpus/
-	-ln -s ${OPUSHOME}/* ${TMPDIR}/OPUS/
-	-ln -s ${OPUSCORPORA}/* ${TMPDIR}/OPUS/corpus/
-	${MAKE} -C ${patsubst ${OPUSHOME}/%,${TMPDIR}/OPUS/%,${shell pwd}} \
-		OPUSHOME=${TMPDIR}/OPUS ${@:-runlocal=}
-	rsync -a ${TMPDIR}/OPUS/corpus/${CORPUS} ${OPUSCORPORA}/
 

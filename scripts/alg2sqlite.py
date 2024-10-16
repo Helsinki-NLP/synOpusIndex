@@ -1,18 +1,37 @@
 #!/usr/bin/env python3
 #
-# USAGE: alg2sqlite.py dbname corpus version < xces-align-file
+# USAGE: alg2sqlite.py -d dbname -c corpus -v version [-r] < xces-align-file
 
 
+import argparse
 import sys
 import xml.parsers.expat
 import sqlite3
 
 
-con = sqlite3.connect(sys.argv[1])
+parser = argparse.ArgumentParser(prog='alg2sqlite',
+                                 description='Insert sentence alignments into an SQLite database')
+parser.add_argument("-d", "--database", type=str, required=True, help="name of the alignment database file")
+parser.add_argument("-c", "--corpus", type=str, required=True, help="name of the OPUS corpus")
+parser.add_argument("-v", "--version", type=str, required=True, help="release of the corpus")
+parser.add_argument("-r", "--reverse", action='store_true', help='reverse alignment direction')
+
+args = parser.parse_args()
+
+con = sqlite3.connect(args.database)
 cur = con.cursor()
 
-corpus = sys.argv[2]
-version = sys.argv[3]
+corpus = args.corpus
+version = args.version
+reverse = args.reverse
+
+# con = sqlite3.connect(sys.argv[1])
+# cur = con.cursor()
+# corpus = sys.argv[2]
+# version = sys.argv[3]
+
+
+
 
 
 ## create bitexts and links tables with indeces over columns
@@ -107,6 +126,13 @@ def start_element(name, attrs):
             fromDoc = attrs['fromDoc'].replace('.xml.gz','.xml')
             if 'toDoc' in attrs:
                 toDoc = attrs['toDoc'].replace('.xml.gz','.xml')
+                
+                # swap aligned documents if necessary
+                if reverse:
+                    tmp = fromDoc
+                    fromDoc = toDoc
+                    toDoc = tmp
+                    
                 cur.execute(f"""INSERT OR IGNORE INTO bitexts(corpus,version,fromDoc,toDoc) 
                                        VALUES ('{corpus}','{version}','{fromDoc}','{toDoc}')""")
                 con.commit()
@@ -129,8 +155,17 @@ def start_element(name, attrs):
                 alignScore = float(attrs['overlap'])
             if 'bicleaner' in attrs:
                 cleanScore = float(attrs['bicleanerScore'])
-            srcIDs = link[0].split()
-            trgIDs = link[1].split()
+                
+            # swap alignment direction if necessary
+            if reverse:
+                trgIDs = link[0].split()
+                srcIDs = link[1].split()
+                link[0] = ' '.join(srcIDs)
+                link[1] = ' '.join(trgIDs)
+            else:
+                srcIDs = link[0].split()
+                trgIDs = link[1].split()
+                
             alignType = str(len(srcIDs)) + '-' + str(len(trgIDs))
             buffer.append(tuple([bitextID,link[0],link[1],alignType,alignScore,cleanScore]))
 

@@ -130,6 +130,7 @@ fromDocID = 0
 toDocID = 0
 count = 0
 
+
 for bitext in bitextDBcur.execute(f"SELECT rowid,fromDoc,toDoc FROM bitexts WHERE corpus='{corpus}' AND version='{version}'"):
     
     # find document IDs (fromDocID and toDocID)
