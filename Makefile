@@ -136,8 +136,14 @@ OLD_LANG = nn
 OLD_LANGPAIRS = $(patsubst %.db,%,$(wildcard *-${OLD_LANG}.db ${OLD_LANG}-*.db))
 OLD_LANGPAIR = ${firstword ${OLD_LANGPAIRS}}
 
+redo-linkdbs:
+	for l in en-hr bs-en en-sl en-nb en-nn en-no cmn-en en-zh en-zh_cn en-zh_tw en-pt_br; do \
+	  make LANGPAIR=$$l iso-linkdb; \
+	done
+
 redo-languages:
-	for l in bs sr hr nn nb no cmn zh zh_cn zh_tw zh_Hant pt_br; do \
+	make LANGPAIR=bs-en SKIP_FILE_RETRIEVAL=1 iso-linkdb 
+	for l in hr nn nb no cmn zh zh_cn zh_tw zh_Hant pt_br; do \
 	  make OLD_LANG=$$l redo-all; \
 	done
 
@@ -152,7 +158,6 @@ redo:
 	find sqlite -name ${OLD_LANGPAIR}.merged -delete
 	find done -name '*${OLD_LANG}*.done' -delete
 	make LANGPAIR=${OLD_LANGPAIR} SKIP_FILE_RETRIEVAL=1 all
-
 
 
 .PHONY: all
@@ -221,29 +226,70 @@ SWIFT_PARAMS = --use-slo --segment-size 5G --changed --skip-identical
 STORAGE_FILES = ${LANGUAGE}.dedup.gz ${LANGUAGE_SENT_DB} ${LANGUAGE_IDX_DB} ${LANGUAGE_FTS_DB} ${LANGPAIR}.db sqlite
 
 
-.PHONY: upload
-upload:
-	which a-put
-	${LOAD_STORAGE_ENV} && \
-	swift upload OPUS-index ${SWIFT_PARAMS} ${STORAGE_FILES}
-	rm -f index.txt
-	${MAKE} index.txt
-	find done -name '${LANGUAGE}.done' | xargs -n 500 git add
-	find done -name '${LANGPAIR}.done' | xargs -n 500 git add
-	find sqlite -name '${LANGPAIR}.merged' | xargs -n 500 git add
-	git add stats/${LANGUAGE}.counts index.txt
+# .PHONY: upload
+# upload:
+# 	which a-put
+# 	${LOAD_STORAGE_ENV} && \
+# 	swift upload OPUS-index ${SWIFT_PARAMS} ${STORAGE_FILES}
+# 	rm -f index.txt
+# 	${MAKE} index.txt
+# 	find done -name '${LANGUAGE}.done' | xargs -n 500 git add
+# 	find done -name '${LANGPAIR}.done' | xargs -n 500 git add
+# 	find sqlite -name '${LANGPAIR}.merged' | xargs -n 500 git add
+# 	git add stats/${LANGUAGE}.counts index.txt
 
+
+# .PHONY: upload-all
+# upload-all:
+# 	which a-put
+# 	${LOAD_STORAGE_ENV} && \
+# 	swift upload OPUS-index ${SWIFT_PARAMS} sqlite *.dedup.gz *.db
+# 	rm -f index.txt
+# 	${MAKE} index.txt
+# 	find done -name '*.done' | xargs -n 500 git add
+# 	find sqlite -name '*.merged' | xargs -n 500 git add
+# 	git add stats/*.counts index.txt
+
+
+
+## NEW: only upload regular files and no symbolic links
+## (symbolic links would be followed and the linked file would be uploaded)
+
+#	${LOAD_STORAGE_ENV} && \
 
 .PHONY: upload-all
 upload-all:
 	which a-put
-	${LOAD_STORAGE_ENV} && \
-	swift upload OPUS-index ${SWIFT_PARAMS} sqlite *.dedup.gz *.db
+	find . -type f \( -name '*.db' -or -name '*.dedup.gz' \) \
+		-exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
 	rm -f index.txt
 	${MAKE} index.txt
+	find . -type l | xargs -n 500 git add
 	find done -name '*.done' | xargs -n 500 git add
 	find sqlite -name '*.merged' | xargs -n 500 git add
 	git add stats/*.counts index.txt
+
+
+#	${LOAD_STORAGE_ENV} && \
+
+.PHONY: upload
+upload:
+	which a-put
+	find . -type f \
+		\( -name '${LANGUAGE}.db' \
+		-or -name '${LANGUAGE}.dedup.gz' \
+		-or -name '${LANG3}.db' \
+		-or -name '${LANGPAIR}.db' \
+		-or -name '${LANGPAIR3}.db' \) \
+		-exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
+	rm -f index.txt
+	${MAKE} index.txt
+	find . -type l | xargs -n 500 git add
+	find done -name '${LANGUAGE}.done' | xargs -n 500 git add
+	find sqlite -name '${LANGPAIR}.merged' | xargs -n 500 git add
+	git add stats/${LANGUAGE}.counts index.txt
+
+
 
 
 index.txt:
@@ -345,11 +391,12 @@ opus.db: $(filter-out bitexts.db opus.db %.ids.db %.fts5.db,\
 
 
 ## create a full-text search database from the sentence DB
+## NEW: always create from scratch (avoid that we include duplicates)
 
 ${LANGUAGE_FTS_DB}: %.fts5.db: %.db
 	${MAKE} STORED_FILE=$@ retrieve
 	mkdir -p $(dir ${INDEX_TMPDIR}/$@)
-	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
+#	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	echo "CREATE VIRTUAL TABLE IF NOT EXISTS sentences USING FTS5(sentence)" | sqlite3 ${INDEX_TMPDIR}/$@
 	echo "ATTACH DATABASE '$(@:.fts5.db=.db)' as org; \
 	      ${INSERT_INTO} sentences SELECT * FROM org.sentences;" | sqlite3 ${INDEX_TMPDIR}/$@
@@ -415,7 +462,7 @@ ${ALL_ALG_DONE}: ${INDEX_TMPDIR}/${LANGPAIR}.db
 ##--------------------------------------------------------------------------------
 
 sqlite/${LANGPAIR}.merged: ${LINK_DB}
-	touch $@
+	@echo "merging sqlite/${LANGPAIR}.db into ${ISO_LINK_DB}"
 
 ${ISO_LINK_DB}: sqlite/${LANGPAIR}.merged
 	@if [ ${LANGPAIR3} != ${SRCLANG}-${TRGLANG} ]; then \
@@ -425,7 +472,9 @@ ${ISO_LINK_DB}: sqlite/${LANGPAIR}.merged
 	      cd sqlite && ln -s ${LANGPAIR}.db ${LANGPAIR3}.db; \
 	    else \
 	      echo "scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}"; \
-	      scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}; \
+	      mkdir -p $(dir ${INDEX_TMPDIR}/$@); \
+	      scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3} ${INDEX_TMPDIR}/$@; \
+	      if [ -e ${INDEX_TMPDIR}/$@ ]; then mv -f ${INDEX_TMPDIR}/$@ $@; fi; \
 	    fi \
 	  elif [ -L $@ ]; then \
 	    if [ `readlink $@` == ${LANGPAIR}.db ]; then \
@@ -434,18 +483,27 @@ ${ISO_LINK_DB}: sqlite/${LANGPAIR}.merged
 	      l=`readlink $@`; \
 	      echo "rm -f $@; cp sqlite/$$l $@"; \
 	      echo "scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}"; \
-	      rm -f $@; \
-	      cp sqlite/$$l $@; \
+	      mkdir -p $(dir ${INDEX_TMPDIR}/$@); \
+	      cp sqlite/$$l ${INDEX_TMPDIR}/$@; \
 	      L=`echo $$l | sed 's/\.db$$//'`; \
-	      echo "CREATE TABLE IF NOT EXISTS langpairs (langpair TEXT NOT NULL PRIMARY KEY)" | sqlite3 $@; \
-	      echo "INSERT OR IGNORE INTO langpairs VALUES ('$$L')" | sqlite3 $@; \
-	      scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}; \
+	      echo "CREATE TABLE IF NOT EXISTS langpairs (langpair TEXT NOT NULL PRIMARY KEY)" | sqlite3 ${INDEX_TMPDIR}/$@; \
+	      echo "INSERT OR IGNORE INTO langpairs VALUES ('$$L')" | sqlite3 ${INDEX_TMPDIR}/$@; \
+	      scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3} ${INDEX_TMPDIR}/$@; \
+	      if [ -e ${INDEX_TMPDIR}/$@ ]; then \
+	        rm -f $@; \
+	        mv -f ${INDEX_TMPDIR}/$@ $@; \
+	      fi; \
 	    fi \
 	  else \
 	    echo "scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}"; \
-	    scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3}; \
+	    mkdir -p $(dir ${INDEX_TMPDIR}/$@); \
+	    rsync $@ ${INDEX_TMPDIR}/$@; \
+	    scripts/linkdb2iso639_3.py sqlite ${SRCLANG} ${TRGLANG} ${SRCLANG3} ${TRGLANG3} ${INDEX_TMPDIR}/$@; \
+	    if [ -e ${INDEX_TMPDIR}/$@ ]; then mv -f ${INDEX_TMPDIR}/$@ $@; fi; \
 	  fi \
 	fi
+	touch $<
+	touch $@
 
 
 

@@ -4,7 +4,7 @@
 #  this will merge several language pairs that correspond to the same
 #  ISO-639-3 macro-language codes of
 #
-# USAGE: linkdb2iso639_3.py dir xx yy xxx yyy
+# USAGE: linkdb2iso639_3.py dir xx yy xxx yyy [newLinkDb]
 #
 #  dir = directory where the DBs are located
 #
@@ -14,14 +14,16 @@
 #  xxx = three-letter source language code (macro-language if available)
 #  yyy = three-letter target language code (macro-language if available)
 #
+# newLinkDb = filename of the new linkDB (optional)
+
 
 import sys
 import sqlite3
 import os, traceback
 import os.path
 
-if len(sys.argv) != 6:
-    print("USAGE: linkdb2iso639_3.py dir xx yy xxx yyy")
+if len(sys.argv) < 6:
+    print("USAGE: linkdb2iso639_3.py dir xx yy xxx yyy [newlinkdb]")
     exit()
 
 dbDir = sys.argv[1]
@@ -49,6 +51,12 @@ if oldLinkDB == linkDB:
 if not os.path.isfile(oldLinkDB):
     print(f"{oldLinkDB} does not exist")
     exit()
+
+    
+## overwrite new linkDB file name
+    
+if len(sys.argv) > 6:
+    linkDB = sys.argv[6]
 
     
 buffersize = 100000
@@ -161,6 +169,29 @@ def insert_range(bitextID):
     linksDBcur.close()
 
 
+# get the bitext ID in the new database
+# - insert new entries if necessary
+# - chache of IDs in an associative list
+    
+bitextIDs = dict()
+def new_bitextID(oldID):
+    global bitextIDs, bitextDBcur, linkDB, linksDBcon, linksDBcur
+    if oldID in bitextIDs:
+        return bitextIDs[oldID]
+    else:
+        bitextDBcur.execute(f"SELECT * FROM bitexts WHERE rowid={oldID}");
+        row = bitextDBcur.fetchone()
+        linksDBcon = sqlite3.connect(linkDB, timeout=7200)
+        linksDBcur = linksDBcon.cursor()
+        linksDBcur.execute('INSERT OR IGNORE INTO bitexts VALUES (?,?,?,?)', row)
+        linksDBcon.commit()
+        linksDBcur.execute(f"SELECT rowid FROM bitexts WHERE corpus='{row[0]}' AND version='{row[1]}' AND fromDoc='{row[2]}' AND toDoc='{row[3]}'");
+        row = linksDBcur.fetchone()
+        bitextIDs[oldID] = row[0]
+        linksDBcur.close()
+        # print(f"new bitext inserted - oldID={oldID} - newID={bitextIDs[oldID]}")
+        return bitextIDs[oldID]
+
 
 ##----------------------------------------------------------------
 # run through all bitexts and copy the links
@@ -176,88 +207,70 @@ fromDocID = 0
 toDocID = 0
 count = 0
 
-for bitext in bitextDBcur.execute(f"SELECT rowid,corpus,version,fromDoc,toDoc FROM bitexts"):
 
-    oldBitextID = bitext[0]
-    corpus = bitext[1]
-    version = bitext[2]
-    # print(f"processing {bitextID} = {corpus}/{version}")
-    
-    if reverse:
-        fromDoc = bitext[4]
-        toDoc = bitext[3]
-    else:
-        fromDoc = bitext[3]
-        toDoc = bitext[4]
+
+
+## copy the linkedsource and linkedtarget tables (reverse if necessary)
+
+if reverse:
+    srclinktable = 'linkedtarget'
+    trglinktable = 'linkedsource'
+else:
+    srclinktable = 'linkedsource'
+    trglinktable = 'linkedtarget'
+
+print(f"copying linkedsource table")
+for row in oldLinkDBcur.execute(f"SELECT sentID,linkID,bitextID FROM {srclinktable}"):
+    print_progress()
+    bitextID = new_bitextID(row[2])
+    linked = list(row)
+    linked[2] = bitextID
+    srcbuffer.append(linked)
+    if len(srcbuffer) >= buffersize:
+        insert_linkedsource()
         
+insert_linkedsource()
 
-    linksDBcon = sqlite3.connect(linkDB, timeout=7200)
-    linksDBcur = linksDBcon.cursor()
-    linksDBcur.execute(f"INSERT OR IGNORE INTO bitexts VALUES ('{corpus}','{version}','{fromDoc}','{toDoc}')")
-    linksDBcur.execute(f"""SELECT rowid FROM bitexts
-                                        WHERE corpus='{corpus}' AND version='{version}' AND
-                                              fromDoc='{fromDoc}' AND toDoc='{toDoc}'""")
-    row = linksDBcur.fetchone()
-    bitextID = row[0]
-    linksDBcon.commit()
-    linksDBcur.close()
 
+print(f"copying linkedtarget table")
+for row in oldLinkDBcur.execute(f"SELECT sentID,linkID,bitextID FROM {trglinktable}"):
+    print_progress()
+    bitextID = new_bitextID(row[2])
+    linked = list(row)
+    linked[2] = bitextID
+    trgbuffer.append(linked)
+    if len(trgbuffer) >= buffersize:
+        insert_linkedtarget()
+        
+insert_linkedtarget()
+
+
+print(f"copying links table")
+for row in oldLinkDBcur.execute(f"SELECT * FROM links"):
+    print_progress()
+    if (reverse):
+        srcID = row[2]
+        trgID = row[3]
+        srcSentID = row[4]
+        trgSentID = row[5]
+        nrSents = row[6].split('-')
+        alignType = str(nrSents[1]) + '-' + str(nrSents[0]) 
+
+        row = list(row)
+        row[2] = trgID
+        row[3] = srcID
+        row[4] = trgSentID
+        row[5] = srcSentID
+        row[6] = alignType
+
+    linkbuffer.append(row)
+    if len(linkbuffer) >= buffersize:
+        insert_links()
     
-    ## copy the linkedsource and linkedtarget tables (reverse if necessary)
-
-    if reverse:
-        srclinktable = 'linkedtarget'
-        trglinktable = 'linkedsource'
-    else:
-        srclinktable = 'linkedsource'
-        trglinktable = 'linkedtarget'
-
-    # print(f"copying linkedsource table")
-    for linked in oldLinkDBcur.execute(f"SELECT sentID,linkID FROM {srclinktable} WHERE bitextID={oldBitextID} ORDER BY rowid"):
-        print_progress()
-        linked += (bitextID,)
-        srcbuffer.append(linked)
-        if len(srcbuffer) >= buffersize:
-            insert_linkedsource()
-    insert_linkedsource()
-
-    # print(f"copying linkedtarget table")
-    for linked in oldLinkDBcur.execute(f"SELECT sentID,linkID FROM {trglinktable} WHERE bitextID={oldBitextID} ORDER BY rowid"):
-        print_progress()
-        linked += (bitextID,)
-        trgbuffer.append(linked)
-        if len(trgbuffer) >= buffersize:
-            insert_linkedtarget()
-    insert_linkedtarget()
-
-    # print(f"copying links table")
-    for row in oldLinkDBcur.execute(f"SELECT * FROM links WHERE bitextID={oldBitextID} ORDER BY rowid"):
-        print_progress()
-        if (reverse):
-            srcID = row[2]
-            trgID = row[3]
-            srcSentID = row[4]
-            trgSentID = row[5]
-            nrSents = row[6].split('-')
-            alignType = str(nrSents[1]) + '-' + str(nrSents[0]) 
-
-            row = list(row)
-            row[2] = trgID
-            row[3] = srcID
-            row[4] = trgSentID
-            row[5] = srcSentID
-            row[6] = alignType
-
-        linkbuffer.append(row)
-        if len(linkbuffer) >= buffersize:
-            insert_links()
-    
-    insert_links()
-    insert_range(bitextID)
+insert_links()
+insert_range(bitextID)
 
 
-
-    
 ## finally: add corpus range information
 
 linksDBcon = sqlite3.connect(linkDB, timeout=7200)
