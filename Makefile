@@ -208,7 +208,7 @@ STORAGE_FILES = ${LANGUAGE_DEDUP} ${LANGUAGE_SENT_DB} ${LANGUAGE_IDX_DB} ${LANGU
 upload:
 	which a-put
 	swift upload OPUS-index ${SWIFT_PARAMS} ${STORAGE_FILES}
-	find sqlite -name '${LINK_DB}' -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
+	find sqlite -name '${LANGPAIR3}.db' -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
 	rm -f index.txt
 	${MAKE} index.txt
 	find done -name '${LANGUAGE}.done' | xargs -n 500 git add
@@ -220,7 +220,8 @@ upload:
 .PHONY: upload-all
 upload-all:
 	which a-put
-	swift upload OPUS-index ${SWIFT_PARAMS} sqlite *.dedup.gz *.db
+	swift upload OPUS-index ${SWIFT_PARAMS} *.dedup.gz *.db
+	find sqlite -name '*.db' -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
 	rm -f index.txt
 	${MAKE} index.txt
 	find done -name '*.done' | xargs -n 500 git add
@@ -543,7 +544,12 @@ ${LATEST_LINK_DB_MERGED}: ${TMP_LINK_DB}
 
 ##--------------------------------------------------------------------------------
 ## database of all bitexts and aligned corpra
-## (copy from tables in alignment database)
+## - copy from tables in alignment database and add language information
+## - this very inefficident as the individual link files do not include language info
+##   --> OPUS language IDs have to be inferred from the document paths
+##   --> this is slow and error prone
+##   --> should be changed in the future
+##   --> or we only use the bitexts.db as the central database anyway
 ##--------------------------------------------------------------------------------
 
 LANGPAIR_DBS = $(wildcard *-*.db)
@@ -559,17 +565,25 @@ bitexts.db: ${LANGPAIR_DBS}
 	echo "${CREATE_INDEX} idx_langpair ON bitexts ( srclang, trglang )" | sqlite3 $@
 	echo "${CREATE_INDEX} idx_langpair3 ON bitexts ( srclang3, trglang3 )" | sqlite3 $@
 	echo "${CREATE_INDEX} idx_corpus ON bitexts ( corpus, version )" | sqlite3 $@
-	for d in $^; do \
-	  s=`echo $$d | cut -f1 -d-`; \
-	  t=`echo $$d | cut -f2 -d- | cut -f1 -d.`; \
-	  S=`iso639 -n -m $$s`; \
-	  T=`iso639 -n -m $$t`; \
-	  echo "$$s $$t $$S $$T"; \
-	  echo "ATTACH DATABASE '$$d' as l; \
-	        ${INSERT_INTO} bitexts SELECT rowid, corpus, version, fromDoc, toDoc,\
-                                              '$$s','$$t','$$S','$$T' FROM l.bitexts;" \
-	  | sqlite3 $@; \
+	for d in $?; do \
+	  S=`echo $$d | cut -f1 -d-`; \
+	  T=`echo $$d | cut -f2 -d- | cut -f1 -d.`; \
+	  P=`echo "select fromDoc,toDoc from bitexts" | sqlite3 -separator " " $$d | sed 's/\/[^ ]* /-/' | cut -f1 -d/ | sort -u | xargs`; \
+	  for p in $$P; do \
+	    s=`echo $$p | cut -f1 -d-`; \
+	    t=`echo $$p | cut -f2 -d-`; \
+	     echo "$$s $$t $$S $$T"; \
+	     echo "ATTACH DATABASE '$$d' as l; \
+	           ${INSERT_INTO} bitexts SELECT rowid, corpus, version, fromDoc, toDoc,\
+                                                 '$$s','$$t','$$S','$$T' FROM l.bitexts \
+	                                  WHERE fromDoc LIKE '$$s/%' AND toDoc LIKE '$$t/%';" \
+	     | sqlite3 $@; \
+	   done \
 	done
+	echo "${CREATE_TABLE} aligned_corpora ( corpus TEXT, version TEXT, srclang TEXT, trglang TEXT, srclang3 TEXT, trglang3 TEXT)" | sqlite3 $@
+	echo "${CREATE_UNIQUE_INDEX} idx_aligned_corpora ON aligned_corpora (corpus,version,srclang,trglang,srclang3,trglang3)" | sqlite3 $@
+	echo "${INSERT_INTO} aligned_corpora SELECT DISTINCT corpus,version,srclang,trglang,srclang3,trglang3 FROM bitexts" | sqlite3 $@
+
 
 ##------------------------------------------------------------------------------------
 ## sentence index that maps corpus-specific indeces to the ID in the sentence DB
