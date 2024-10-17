@@ -130,8 +130,8 @@ all: ${LINK_DB}
 	${MAKE} linkdb
 
 .PHONY: all-mono
-all-mono: stats/${LANGUAGE}.counts
-	${MAKE} ${LANGUAGE_DEDUP} ${LANGUAGE_SENT_DB}
+all-mono: ${LANGUAGE_DEDUP}
+	${MAKE} ${LANGUAGE_SENT_DB}
 	${MAKE} ${LANGUAGE_IDX_DB}
 	${MAKE} ${LANGUAGE_FTS_DB}
 
@@ -146,7 +146,7 @@ linkdb: ${LATEST_LINK_DB}
 
 
 
-HPLT_LANGPAIRS = ar-en bs-en ca-en en-et en-eu en-fi en-ga en-gl en-hi en-hr en-is en-mk en-mt en-nn en-sq en-sr en-sw en-zh_Hant cmn_Hant-en cmn-en
+HPLT_LANGPAIRS = ar-en bs-en ca-en en-et en-eu en-fi en-ga en-gl en-hi en-hr en-is en-mk en-mt en-nn en-sq en-sr en-sw en-zh_Hant
 
 hplt-all:
 	for l in ${HPLT_LANGPAIRS}; do ${MAKE} LANGPAIR=$$l all; done
@@ -214,7 +214,7 @@ upload:
 	find done -name '${LANGUAGE}.done' | xargs -n 500 git add
 	find done -name '${LANGPAIR}.done' | xargs -n 500 git add
 	find sqlite -name '${LINKDB_LANGPAIR}.merged' | xargs -n 500 git add
-	git add stats/${LANGUAGE}.counts index.txt
+	git add index.txt
 
 
 .PHONY: upload-all
@@ -225,7 +225,7 @@ upload-all:
 	${MAKE} index.txt
 	find done -name '*.done' | xargs -n 500 git add
 	find sqlite -name '*.merged' | xargs -n 500 git add
-	git add stats/*.counts index.txt
+	git add index.txt
 
 
 
@@ -241,21 +241,6 @@ index-filesize.txt:
 	which a-get
 	rclone ls allas:OPUS-index | grep  '\.dedup.gz$$'  > $@
 	rclone ls allas:OPUS-index | grep  '\.db$$'       >> $@
-
-
-
-
-.PHONY: job-puhti
-job-puhti:
-	${MAKE} HPC_MEM=16g HPC_CORES=8 CORES=4 THREADS=4 HPC_DISK=1000 all-mono.submit
-
-.PHONY: job-puhti
-dedup-job-puhti:
-	${MAKE} HPC_MEM=16g HPC_CORES=8 CORES=4 THREADS=4 HPC_DISK=1000 dedup.submit
-
-
-big-job-puhti:
-	${MAKE} HPC_MEM=32g HPC_CORES=16 CORES=8 THREADS=8 HPC_DISK=3000 all-mono.submit
 
 
 
