@@ -131,7 +131,7 @@ all: ${LINK_DB}
 
 .PHONY: all-mono
 all-mono: ${LANGUAGE_DEDUP}
-	${MAKE} ${LANGUAGE_SENT_DB}
+	if [ ! -e ${LANGUAGE_SENT_DB} ]; then ${MAKE} ${LANGUAGE_SENT_DB}; fi
 	${MAKE} ${LANGUAGE_IDX_DB}
 	${MAKE} ${LANGUAGE_FTS_DB}
 
@@ -148,8 +148,34 @@ linkdb: ${LATEST_LINK_DB}
 
 HPLT_LANGPAIRS = ar-en bs-en ca-en en-et en-eu en-fi en-ga en-gl en-hi en-hr en-is en-mk en-mt en-nn en-sq en-sr en-sw en-zh_Hant
 
+HPLT_LANGS = ar bs ca et eu fi ga gl hi hr is mk mt nn sq sr sw zh_Hant
+
 hplt-all:
-	for l in ${HPLT_LANGPAIRS}; do ${MAKE} LANGPAIR=$$l all; done
+	for s in ${HPLT_LANGS}; do \
+	  for t in ${HPLT_LANGS}; do \
+	    if [ "$$s" \< "$$t" ]; then \
+		echo "start making langpair $$s-$$t"; \
+		${MAKE} LANGPAIR=$$s-$$t all; \
+	    fi \
+	  done \
+	done
+# 	for l in ${HPLT_LANGPAIRS}; do ${MAKE} LANGPAIR=$$l all; done
+
+
+hbs:
+	make LANGPAIR=bs-en all-links
+	make LANGPAIR=en-hr all-links
+	make LANGPAIR=en-sr all-links
+
+zh:
+	make LANGPAIR=en-zh all-links
+	make LANGPAIR=en-zh_Hant all-links
+	make LANGPAIR=en-zh_cn all-links
+	make LANGPAIR=en-zh_tw all-links
+	make LANGPAIR=en-yue all-links
+	make LANGPAIR=cmn-en all-links
+
+
 
 
 
@@ -158,30 +184,6 @@ counts: stats/${LANGUAGE}.counts
 
 .PHONY: dedup
 dedup: ${LANGUAGE_DEDUP}
-
-
-
-rename-linkdbs:
-	for d in $(wildcard sqlite/*-*.db); do \
-	  l=`echo $$d | cut -f2 -d/ | cut -f1 -d. | xargs iso639 -m -n -p`; \
-	  n="sqlite/$$l.db"; \
-	  if [ $$n != $$d ]; then \
-	    if [ ! -e $$n ]; then \
-	      mv $$d $$n; \
-	    fi \
-	  fi \
-	done
-	for d in $(wildcard *-*.db); do \
-	  l=`echo $$d | cut -f1 -d. | xargs iso639 -m -n -p`; \
-	  n="$$l.db"; \
-	  if [ $$n != $$d ]; then \
-	    if [ ! -e $$n ]; then \
-	      mv $$d $$n; \
-	    fi \
-	  fi \
-	done
-
-
 
 
 ## in case the flags for finishing sentence extraction
@@ -195,11 +197,10 @@ tmp-dedup-fix:
 
 
 
-## TODO: upload targets are not up-to-date!
 
-SWIFT_PARAMS = --use-slo --segment-size 5G --changed --skip-identical
 
-STORAGE_FILES = ${LANGUAGE_DEDUP} ${LANGUAGE_SENT_DB} ${LANGUAGE_IDX_DB} ${LANGUAGE_FTS_DB} ${LINK_DB}
+STORAGE_FILES := ${LANGUAGE_SENT_DB} ${LANGUAGE_IDX_DB} ${LANGUAGE_FTS_DB} ${LINK_DB}
+SWIFT_PARAMS  := --use-slo --segment-size 5G --changed --skip-identical
 
 ## add this before swift command?
 #	${LOAD_STORAGE_ENV} && \
@@ -220,7 +221,7 @@ upload:
 .PHONY: upload-all
 upload-all:
 	which a-put
-	swift upload OPUS-index ${SWIFT_PARAMS} *.dedup.gz *.db
+	swift upload OPUS-index ${SWIFT_PARAMS} *.db
 	find sqlite -name '*.db' -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
 	rm -f index.txt
 	${MAKE} index.txt
@@ -232,16 +233,12 @@ upload-all:
 
 index.txt:
 	which a-get
-	swift list OPUS-index | grep '\.dedup.gz$$' | \
-		sed 's#^#https://object.pouta.csc.fi/OPUS-index/#' > $@
-	swift list OPUS-index | grep '\.db$$'       | \
-		sed 's#^#https://object.pouta.csc.fi/OPUS-index/#' >> $@
+	swift list OPUS-index | grep '\.db$$' > $@
 
 
 index-filesize.txt:
 	which a-get
-	rclone ls allas:OPUS-index | grep  '\.dedup.gz$$'  > $@
-	rclone ls allas:OPUS-index | grep  '\.db$$'       >> $@
+	rclone ls allas:OPUS-index | grep  '\.db$$' >> $@
 
 
 
@@ -267,7 +264,7 @@ MODIFY_DB_DUMP      := sed 's/CREATE TABLE/${CREATE_TABLE}/;s/INSERT/INSERT OR I
 ## download the old dedup file in case it exists
 ## and no local file exists
 ${LANGUAGE_DEDUP}: ${ALL_MONO_DONE}
-	${MAKE} STORED_FILE=$@ retrieve
+	$(call retrieve,$@)
 	mkdir -p $(dir ${INDEX_TMPDIR}/$@)
 	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	if [ `find ${INDEX_TMPDIR} -name '*.dedup' | wc -l` -gt 0 ]; then \
@@ -285,7 +282,7 @@ ${LANGUAGE_DEDUP}: ${ALL_MONO_DONE}
 ## sqlite database of all sentences
 
 ${LANGUAGE_SENT_DB}: ${LANGUAGE_DEDUP}
-	${MAKE} STORED_FILE=$@ retrieve
+	$(call retrieve,$@)
 	mkdir -p ${INDEX_TMPDIR}
 	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	${GZIP} -cd < $< | ${SCRIPTDIR}sent2sqlite.py ${INDEX_TMPDIR}/$@
@@ -312,16 +309,28 @@ opus.db: $(filter-out bitexts.db opus.db %.ids.db %.fts5.db,\
 
 
 ## create a full-text search database from the sentence DB
-## NEW: always create from scratch (avoid that we include duplicates)
+## NEW: check rowid's if the fts-DB exists and only update with new rows
+##      otherwise, create from scratch in the tmpdir and copy back
 
 ${LANGUAGE_FTS_DB}: %.fts5.db: %.db
-	${MAKE} STORED_FILE=$@ retrieve
-	mkdir -p $(dir ${INDEX_TMPDIR}/$@)
-#	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
-	echo "CREATE VIRTUAL TABLE IF NOT EXISTS sentences USING FTS5(sentence)" | sqlite3 ${INDEX_TMPDIR}/$@
-	echo "ATTACH DATABASE '$(@:.fts5.db=.db)' as org; \
-	      ${INSERT_INTO} sentences SELECT * FROM org.sentences;" | sqlite3 ${INDEX_TMPDIR}/$@
-	mv -f ${INDEX_TMPDIR}/$@ $@
+	$(call retrieve,$@)
+	if [ -e $@ ]; then \
+	  a=`echo "select max(rowid) from sentences" | sqlite3 $<`; \
+	  b=`echo "select max(rowid) from sentences" | sqlite3 $@`; \
+	  if [ "$$a" != "$$b" ]; then \
+	    echo "ATTACH DATABASE '$<' as org; \
+	          ${INSERT_INTO} sentences SELECT * FROM org.sentences WHERE rowid>$$b;" \
+	    | sqlite3 $@; \
+	  fi; \
+	else \
+	  mkdir -p $(dir ${INDEX_TMPDIR}/$@); \
+	  echo "CREATE VIRTUAL TABLE IF NOT EXISTS sentences USING FTS5(sentence)" \
+	  | sqlite3 ${INDEX_TMPDIR}/$@; \
+	  echo "ATTACH DATABASE '$<' as org; \
+	        ${INSERT_INTO} sentences SELECT * FROM org.sentences;" \
+	  | sqlite3 ${INDEX_TMPDIR}/$@; \
+	  mv -f ${INDEX_TMPDIR}/$@ $@; \
+	fi
 
 
 
@@ -342,7 +351,7 @@ ${LINK_DB}: ${ALL_ALG_DONE}
 .INTERMEDIATE: ${INDEX_TMPDIR}/${LINK_DB}
 
 ${INDEX_TMPDIR}/${LINK_DB}:
-	${MAKE} STORED_FILE=${LINK_DB} retrieve
+	$(call retrieve,${LINK_DB})
 	mkdir -p $(dir $@)
 	if [ -e $(notdir $@) ]; then rsync $(notdir $@) $@; fi
 	@if [ ! -e $@ ]; then \
@@ -459,7 +468,7 @@ TMP_LINK_DB := ${INDEX_TMPDIR}/${LATEST_LINK_DB}
 SQLITE3 = sqlite3 -cmd ".timeout 100000"
 
 ${TMP_LINK_DB}:
-	${MAKE} STORED_FILE=${LATEST_LINK_DB} retrieve
+	$(call retrieve,${LATEST_LINK_DB})
 	mkdir -p $(dir $@)
 	if [ -e ${LATEST_LINK_DB} ]; then rsync -av ${LATEST_LINK_DB} $@; fi
 	@echo "${CREATE_TABLE} linkedsource ( sentID INTEGER, linkID INTEGER, bitextID INTEGER, PRIMARY KEY(linkID,sentID) )" | ${SQLITE3} $@
@@ -476,6 +485,8 @@ ${TMP_LINK_DB}:
 	@echo "${CREATE_UNIQUE_INDEX} idx_links ON links ( bitextID, srcIDs, trgIDs )" | ${SQLITE3} $@
 	@echo "${CREATE_INDEX} idx_aligntype ON links ( bitextID, alignType )" | ${SQLITE3} $@
 	@echo "${CREATE_INDEX} idx_bitextid ON links ( bitextID )" | ${SQLITE3} $@
+	@echo "${CREATE_TABLE} corpora ( corpus TEXT, version TEXT, srclang TEXT, trglang TEXT, srclang3 TEXT, trglang3 TEXT)" | sqlite3 $@
+	echo "${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3)" | sqlite3 $@
 	@echo "PRAGMA journal_mode=WAL" | ${SQLITE3} $@
 
 
@@ -490,6 +501,13 @@ ${TMP_LINK_DB}:
 ## - mark the corpus as done (merged flag)
 
 ${LATEST_LINK_DB_MERGED}: ${TMP_LINK_DB}
+##############################################################################
+##############################################################################
+## the following 2 lines should be removed in the future (not needed anymore)
+	@echo "${CREATE_TABLE} corpora ( corpus TEXT, version TEXT, srclang TEXT, trglang TEXT, srclang3 TEXT, trglang3 TEXT)" | ${SQLITE3} ${TMP_LINK_DB}
+	echo "${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3)" | ${SQLITE3} ${TMP_LINK_DB}
+##############################################################################
+##############################################################################
 	@( c=$(word 2,$(subst /, ,$@)); \
 	  l=`grep 'latest_release:' ${OPUSRELEASE}/$$c/info.yaml | cut -f2 -d' ' | xargs`; \
 	  m=`find sqlite/$$c -mindepth 2 -name '${LINKDB_LANGPAIR}.merged' | cut -f3 -d/ | xargs`; \
@@ -504,13 +522,15 @@ ${LATEST_LINK_DB_MERGED}: ${TMP_LINK_DB}
 		    DELETE FROM linkedtarget WHERE bitextID IN \
 			( SELECT DISTINCT rowid FROM b.bitexts WHERE corpus='$$c' AND version='$$v' );" \
 	  	    | ${SQLITE3} ${TMP_LINK_DB}; \
+	      echo "DELETE FROM corpora WHERE corpus='$$c' AND version='$$v'" | ${SQLITE3} ${TMP_LINK_DB}; \
 	      rm -f sqlite/$$c/$$v/${LINKDB_LANGPAIR}.merged; \
 	    fi \
 	  done; \
 	  if [ ! -e sqlite/$$c/$$l/${LINKDB_LANGPAIR}.merged ]; then \
 	    echo "add links for $$c/$$l/${LINKDB_LANGPAIR}"; \
 	    if [ ! -e sqlite/$$c/$$l/${LINKDB_LANGPAIR}.db ]; then \
-		${MAKE} sqlite/$$c/$$l/${LINKDB_LANGPAIR}.db; \
+		${MAKE} sqlite/$$c/$$l/${LINKDB_LANGPAIR}.db || \
+		echo "cannot make sqlite/$$c/$$l/${LINKDB_LANGPAIR}.db"; \
 	    fi; \
 	    if [ -e sqlite/$$c/$$l/${LINKDB_LANGPAIR}.db ]; then \
 	      rsync sqlite/$$c/$$l/${LINKDB_LANGPAIR}.db ${INDEX_TMPDIR}/$$c-$$l-${LINKDB_LANGPAIR}.db; \
@@ -518,6 +538,8 @@ ${LATEST_LINK_DB_MERGED}: ${TMP_LINK_DB}
 		    ${INSERT_INTO} links SELECT * FROM l.links; \
 		    ${INSERT_INTO} linkedsource SELECT * FROM l.linkedsource; \
 		    ${INSERT_INTO} linkedtarget SELECT * FROM l.linkedtarget;" \
+	      | ${SQLITE3} ${TMP_LINK_DB}; \
+	      echo "${INSERT_INTO} corpora VALUES('$$c','$$l','${SRCLANG}','${TRGLANG}','${SRCLANG3}','${TRGLANG3}')" \
 	      | ${SQLITE3} ${TMP_LINK_DB}; \
 	      rm -f ${INDEX_TMPDIR}/$$c-$$l-${LINKDB_LANGPAIR}.db; \
 	      touch sqlite/$$c/$$l/${LINKDB_LANGPAIR}.merged; \
@@ -631,7 +653,7 @@ ${ALL_MONO_IDSDONE}: ${INDEX_TMPDIR}/${LANGUAGE_IDX_DB} ${TMP_SENTENCE_DB}
 
 .INTERMEDIATE: ${INDEX_TMPDIR}/${LANGUAGE_IDX_DB}
 ${INDEX_TMPDIR}/${LANGUAGE_IDX_DB}:
-	${MAKE} STORED_FILE=$(notdir $@) retrieve
+	$(call retrieve,$(notdir $@))
 	mkdir -p $(dir $@)
 	if [ -e $(notdir $@) ]; then rsync -av $(notdir $@) $@; fi
 	echo "${CREATE_TABLE} documents ( corpus, version, document )" | sqlite3 $@
@@ -697,7 +719,7 @@ print-jsonl:
 ## jsonl format
 
 ${LANGUAGE}.jsonl.gz: ${ALL_MONO_JSONLDONE}
-	${MAKE} STORED_FILE=$@ retrieve
+	$(call retrieve,$@)
 	mkdir -p $(dir ${INDEX_TMPDIR}/$@)
 	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	if [ -e ${INDEX_TMPDIR}/$@ ]; then \
@@ -758,9 +780,34 @@ ${ALL_MONO_DONE}: done/%.done: ${INDEX_TMPDIR}/%.dedup
 
 
 
-## retrieve a file from allas if it exists
-## and sync it to the temporary file location as well
 
+## retrieving files from the storage
+## (if they exist and file-retrieval is not disabled)
+
+# GIT_RAW_URL := https://raw.githubusercontent.com/Helsinki-NLP/OpusIndex/refs/heads/
+# GIT_BRANCH  := ${shell git rev-parse --abbrev-ref HEAD}
+# INDEX_FILE_LIST := ${GIT_RAW_URL}${GIT_BRANCH}/index.txt
+# INDEX_FILE_LIST := ${STORAGE_BASE}index/index.txt
+
+ifneq (${SKIP_FILE_RETRIEVAL},1)
+retrieve = $(shell \
+	if [ ! -e ${1} ]; then \
+	  if [ `grep '${1}' index.txt | wc -l` -gt 0 ]; then \
+	    mkdir -p $(dir ${1}); \
+	    wget -qq -O ${1} ${STORAGE_BASE}index/${1}; \
+	  fi \
+	fi )
+else
+retrieve = echo "downloading files is disabled (skip retrieving $1)"
+endif
+
+
+
+## OLD: retrieve files from storage as a PHONY make target
+## --> this is slow because of a separate make call
+## --> use retrieve-function above instead with 'call'
+
+.PHONY: retrieve
 retrieve:
 ifneq (${SKIP_FILE_RETRIEVAL},1)
 	@if [ ! -e ${STORED_FILE} ]; then \
@@ -770,9 +817,4 @@ ifneq (${SKIP_FILE_RETRIEVAL},1)
 	  fi \
 	fi
 endif
-
-
-
-
-
 
