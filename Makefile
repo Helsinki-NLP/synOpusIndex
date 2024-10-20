@@ -123,20 +123,34 @@ TRGLANG_IDX_DB      := ${TRGLANG3}.ids.db
 .INTERMEDIATE: ${ALL_MONO_DEDUP}
 
 
+## create link-db without parallel threads
+## --> avoid errors with locked DB files
+## --> avoid mixed rowid ranges for individual corpora
+
 .PHONY: all
-all: ${LINK_DB}
+all: srclang trglang
+	${MAKE} -j1 ${LINK_DB}
+	${MAKE} ${LATEST_LINK_DB}
+
+.PHONY: srclang
+srclang:
 	${MAKE} LANGUAGE=${SRCLANG} all-mono
+
+.PHONY: trglang
+trglang:
 	${MAKE} LANGUAGE=${TRGLANG} all-mono
-	${MAKE} linkdb
+
 
 .PHONY: all-mono
-all-mono: ${LANGUAGE_DEDUP}
+all-mono:
+	$(call retrieve,${LANGUAGE_SENT_DB})
 	if [ ! -e ${LANGUAGE_SENT_DB} ]; then ${MAKE} ${LANGUAGE_SENT_DB}; fi
 	${MAKE} ${LANGUAGE_IDX_DB}
 	${MAKE} ${LANGUAGE_FTS_DB}
 
 .PHONY: all-links
-all-links: ${LINK_DB}
+all-links:
+	${MAKE} -j1 ${LINK_DB}
 	${MAKE} ${LATEST_LINK_DB}
 
 
@@ -162,11 +176,6 @@ hplt-all:
 # 	for l in ${HPLT_LANGPAIRS}; do ${MAKE} LANGPAIR=$$l all; done
 
 
-hbs:
-	make LANGPAIR=bs-en all-links
-	make LANGPAIR=en-hr all-links
-	make LANGPAIR=en-sr all-links
-
 zh:
 	make LANGPAIR=en-zh all-links
 	make LANGPAIR=en-zh_Hant all-links
@@ -184,18 +193,6 @@ counts: stats/${LANGUAGE}.counts
 
 .PHONY: dedup
 dedup: ${LANGUAGE_DEDUP}
-
-
-## in case the flags for finishing sentence extraction
-## and we don't want to re-run all deduplication for all corpora
-## --> run this temporary target to create all flags for all corpora
-## --> WARNING: now you don't know whether things have been done
-
-tmp-dedup-fix:
-	touch ${ALL_MONO_DONE}
-	touch ${LANGUAGE_DEDUP}
-
-
 
 
 
@@ -281,8 +278,9 @@ ${LANGUAGE_DEDUP}: ${ALL_MONO_DONE}
 
 ## sqlite database of all sentences
 
-${LANGUAGE_SENT_DB}: ${LANGUAGE_DEDUP}
+${LANGUAGE_SENT_DB}:
 	$(call retrieve,$@)
+	${MAKE} ${LANGUAGE_DEDUP}
 	mkdir -p ${INDEX_TMPDIR}
 	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	${GZIP} -cd < $< | ${SCRIPTDIR}sent2sqlite.py ${INDEX_TMPDIR}/$@
@@ -293,8 +291,7 @@ ${LANGUAGE_SENT_DB}: ${LANGUAGE_DEDUP}
 ## all sentences in all languages in one database
 ## --> that's going to be very big ....
 
-opus.db: $(filter-out bitexts.db opus.db %.ids.db %.fts5.db,\
-		$(filter-out $(wildcard *-*.db),$(wildcard *.db)))
+opus.db: $(filter-out bitexts.db opus.db %.ids.db %.fts5.db $(wildcard *-*.db),$(wildcard *.db)))
 	mkdir -p ${INDEX_TMPDIR}
 	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
 	echo "${CREATE_TABLE} sentences ( sentence TEXT UNIQUE PRIMARY KEY NOT NULL )" \
@@ -340,13 +337,11 @@ ${LANGUAGE_FTS_DB}: %.fts5.db: %.db
 ${LINK_DB}: ${ALL_ALG_DONE}
 	@if [ -e ${INDEX_TMPDIR}/$@ ]; then \
 	  mv -f ${INDEX_TMPDIR}/$@ $@; \
-	  echo "${CREATE_TABLE} aligned_corpora ( corpus TEXT, version TEXT)" | sqlite3 $@; \
-	  echo "${CREATE_UNIQUE_INDEX} idx_aligned_corpora ON aligned_corpora ( corpus, version )" \
-		| sqlite3 $@; \
-	  echo "${INSERT_INTO} aligned_corpora SELECT DISTINCT corpus,version FROM bitexts" \
-		| sqlite3 $@; \
 	fi
 
+
+## create an intermediate DB for all links
+## TODO: do we still need the alignments view (see scripts/alg2sqlite.py)
 
 .INTERMEDIATE: ${INDEX_TMPDIR}/${LINK_DB}
 
@@ -355,25 +350,29 @@ ${INDEX_TMPDIR}/${LINK_DB}:
 	mkdir -p $(dir $@)
 	if [ -e $(notdir $@) ]; then rsync $(notdir $@) $@; fi
 	@if [ ! -e $@ ]; then \
-	  echo "${CREATE_TABLE} bitexts ( corpus TEXT, version TEXT, fromDoc TEXT, toDoc TEXT )" \
-		| sqlite3 $@; \
-	  echo "${CREATE_UNIQUE_INDEX} idx_bitexts ON bitexts ( corpus, version, fromDoc, toDoc )" \
-		| sqlite3 $@; \
+	  echo "${CREATE_TABLE} bitexts (corpus TEXT,version TEXT,fromDoc TEXT,toDoc TEXT)" | sqlite3 $@; \
+	  echo "${CREATE_UNIQUE_INDEX} idx_bitexts ON bitexts (corpus,version,fromDoc,toDoc)" | sqlite3 $@; \
 	  echo "${CREATE_TABLE} links ( bitextID, srcIDs TEXT, trgIDs TEXT, alignType TEXT, \
-			                alignerScore REAL, cleanerScore REAL)" \
-		| sqlite3 $@; \
-	  echo "${CREATE_UNIQUE_INDEX} idx_links ON links ( bitextID, srcIDs, trgIDs )" \
-		| sqlite3 $@; \
-	  echo "${CREATE_INDEX} idx_bitextid ON links ( bitextID )" | sqlite3 $@; \
-	  echo "${CREATE_INDEX} idx_aligntype ON links ( bitextID, alignType )" | sqlite3 $@; \
+			                alignerScore REAL, cleanerScore REAL)" | sqlite3 $@; \
+	  echo "${CREATE_UNIQUE_INDEX} idx_links ON links (bitextID,srcIDs,trgIDs)" | sqlite3 $@; \
+	  echo "${CREATE_INDEX} idx_bitextid ON links (bitextID)" | sqlite3 $@; \
+	  echo "${CREATE_INDEX} idx_aligntype ON links (bitextID,alignType)" | sqlite3 $@; \
+	  echo "${CREATE_TABLE} corpora (corpus TEXT,version TEXT,srclang TEXT,trglang TEXT,srclang3 TEXT,trglang3 TEXT)" | sqlite3 $@; \
+	  echo "${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3)" | sqlite3 $@; \
 	  echo "PRAGMA journal_mode=WAL" | sqlite3 $@; \
 	fi
+
 
 ${ALL_ALG_DONE}: ${INDEX_TMPDIR}/${LINK_DB}
 	@echo "processing $(@:.done=.xml.gz)"
 	@wget -qq -O - $(patsubst done/%.done,${STORAGE_BASE}%.xml.gz,$@) \
 	| gzip -cd \
 	| ${ALG2SQLITE} -d $< -c $(word 2,$(subst /, ,$@)) -v $(word 3,$(subst /, ,$@))
+	@echo "${INSERT_INTO} corpora VALUES('$(word 2,$(subst /, ,$@))', \
+                                             '$(word 3,$(subst /, ,$@))', \
+                                             '${SRCLANG}','${TRGLANG}', \
+                                             '${SRCLANG3}','${TRGLANG3}')" \
+	| sqlite3 $<
 	@mkdir -p $(dir $@)
 	@touch $@
 
@@ -396,21 +395,14 @@ ${ALL_ALG_DONE}: ${INDEX_TMPDIR}/${LINK_DB}
 ##     instead of adding ${LATEST_LINK_DB_MERGED} as pre-requisites
 ## --> merging takes place in temporary location
 ## --> move the link database back to the target location
-## --> add bitext and aligned_corpora tables from the master bitext database
-## --> finally, create indeces over bitexts and aligned_corpora
-##
-##
-## TODO: corpus-range will not work anymore if we join several language pairs
-##       that can occupy different parts of the table
-##
+## --> add bitext table from the master bitext database
+## --> add rowid ranges over bitexts and corpora
 
 ${LATEST_LINK_DB}: ${LINK_DB} ${ALL_LINK_DBS}
 	${MAKE} -j1 merge-latest-linkdbs
 	if [ -e ${TMP_LINK_DB} ]; then mv -f ${TMP_LINK_DB} $@; fi
 	sqlite3 $< ".dump bitexts" | ${MODIFY_DB_DUMP} | sqlite3 $@
-	sqlite3 $< ".dump aligned_corpora" | ${MODIFY_DB_DUMP} | sqlite3 $@
 	echo "${CREATE_UNIQUE_INDEX} idx_bitexts ON bitexts (corpus,version,fromDoc,toDoc)" | sqlite3 $@
-	echo "${CREATE_UNIQUE_INDEX} idx_corpora ON aligned_corpora (corpus,version)" | sqlite3 $@
 	${SCRIPTDIR}add_bitext_range.py $@
 	${SCRIPTDIR}add_corpus_range.py $@
 
@@ -471,22 +463,22 @@ ${TMP_LINK_DB}:
 	$(call retrieve,${LATEST_LINK_DB})
 	mkdir -p $(dir $@)
 	if [ -e ${LATEST_LINK_DB} ]; then rsync -av ${LATEST_LINK_DB} $@; fi
-	@echo "${CREATE_TABLE} linkedsource ( sentID INTEGER, linkID INTEGER, bitextID INTEGER, PRIMARY KEY(linkID,sentID) )" | ${SQLITE3} $@
-	@echo "${CREATE_TABLE} linkedtarget ( sentID INTEGER, linkID INTEGER, bitextID INTEGER, PRIMARY KEY(linkID,sentID) )" | ${SQLITE3} $@
+	@echo "${CREATE_TABLE} linkedsource (sentID INTEGER,linkID INTEGER,bitextID INTEGER,PRIMARY KEY(linkID,sentID) )" | ${SQLITE3} $@
+	@echo "${CREATE_TABLE} linkedtarget (sentID INTEGER,linkID INTEGER,bitextID INTEGER,PRIMARY KEY(linkID,sentID) )" | ${SQLITE3} $@
 	@echo "${CREATE_INDEX} idx_linkedsource_bitext ON linkedsource (bitextID,sentID)" | ${SQLITE3} $@
 	@echo "${CREATE_INDEX} idx_linkedtarget_bitext ON linkedtarget (bitextID,sentID)" | ${SQLITE3} $@
 	@echo "${CREATE_INDEX} idx_linkedsource_linkid ON linkedsource (linkID)" | ${SQLITE3} $@
 	@echo "${CREATE_INDEX} idx_linkedtarget_linkid ON linkedtarget (linkID)" | ${SQLITE3} $@
 	@echo "${CREATE_INDEX} idx_linkedsource_sentid ON linkedsource (sentID)" | ${SQLITE3} $@
 	@echo "${CREATE_INDEX} idx_linkedtarget_sentid ON linkedtarget (sentID)" | ${SQLITE3} $@
-	@echo "${CREATE_TABLE} links ( linkID INTEGER NOT NULL PRIMARY KEY, bitextID, \
-                                       srcIDs TEXT, trgIDs TEXT, srcSentIDs TEXT, trgSentIDs TEXT, \
-                                       alignType TEXT, alignerScore REAL, cleanerScore REAL)" | ${SQLITE3} $@
-	@echo "${CREATE_UNIQUE_INDEX} idx_links ON links ( bitextID, srcIDs, trgIDs )" | ${SQLITE3} $@
-	@echo "${CREATE_INDEX} idx_aligntype ON links ( bitextID, alignType )" | ${SQLITE3} $@
-	@echo "${CREATE_INDEX} idx_bitextid ON links ( bitextID )" | ${SQLITE3} $@
-	@echo "${CREATE_TABLE} corpora ( corpus TEXT, version TEXT, srclang TEXT, trglang TEXT, srclang3 TEXT, trglang3 TEXT)" | sqlite3 $@
-	echo "${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3)" | sqlite3 $@
+	@echo "${CREATE_TABLE} links (linkID INTEGER NOT NULL PRIMARY KEY,bitextID, \
+                                      srcIDs TEXT,trgIDs TEXT,srcSentIDs TEXT,trgSentIDs TEXT, \
+                                      alignType TEXT,alignerScore REAL,cleanerScore REAL)" | ${SQLITE3} $@
+	@echo "${CREATE_UNIQUE_INDEX} idx_links ON links (bitextID,srcIDs,trgIDs)" | ${SQLITE3} $@
+	@echo "${CREATE_INDEX} idx_aligntype ON links (bitextID,alignType)" | ${SQLITE3} $@
+	@echo "${CREATE_INDEX} idx_bitextid ON links (bitextID)" | ${SQLITE3} $@
+	@echo "${CREATE_TABLE} corpora (corpus TEXT,version TEXT,srclang TEXT,trglang TEXT,srclang3 TEXT,trglang3 TEXT)" | sqlite3 $@
+	@echo "${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3)" | sqlite3 $@
 	@echo "PRAGMA journal_mode=WAL" | ${SQLITE3} $@
 
 
@@ -501,13 +493,6 @@ ${TMP_LINK_DB}:
 ## - mark the corpus as done (merged flag)
 
 ${LATEST_LINK_DB_MERGED}: ${TMP_LINK_DB}
-##############################################################################
-##############################################################################
-## the following 2 lines should be removed in the future (not needed anymore)
-	@echo "${CREATE_TABLE} corpora ( corpus TEXT, version TEXT, srclang TEXT, trglang TEXT, srclang3 TEXT, trglang3 TEXT)" | ${SQLITE3} ${TMP_LINK_DB}
-	echo "${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3)" | ${SQLITE3} ${TMP_LINK_DB}
-##############################################################################
-##############################################################################
 	@( c=$(word 2,$(subst /, ,$@)); \
 	  l=`grep 'latest_release:' ${OPUSRELEASE}/$$c/info.yaml | cut -f2 -d' ' | xargs`; \
 	  m=`find sqlite/$$c -mindepth 2 -name '${LINKDB_LANGPAIR}.merged' | cut -f3 -d/ | xargs`; \
@@ -551,12 +536,41 @@ ${LATEST_LINK_DB_MERGED}: ${TMP_LINK_DB}
 	  fi )
 	@touch $@
 
+##-----------------------------------------------------------------------------
 ## should we sync back each time a DB has been merged?
 ## --> more failsafe to get the temporary DB back in place
 ## --> problematic in parallel threads?
 ## --> time-consuming
 #
 #	@rsync ${TMP_LINK_DB} ${LATEST_LINK_DB}
+#
+##-----------------------------------------------------------------------------
+## if we want to only have document pairs that are part of the latest releases
+## then we would need to delete bitexts from old releases and add the ones from the latest:
+##
+## create bitexts table with bitextID as unique key (add to ${TMP_LINK_DB})
+##
+#	@echo "${CREATE_TABLE} bitexts (bitextID,corpus TEXT,version TEXT,fromDoc TEXT,toDoc TEXT)" | sqlite3 $@
+#	@echo "${CREATE_UNIQUE_INDEX} idx_bitexts ON bitexts (corpus,version,fromDoc,toDoc)" | sqlite3 $@
+#	@echo "${CREATE_UNIQUE_INDEX} idx_bitext_ids ON bitexts (bitextID)" | sqlite3 $@
+#	@echo "${CREATE_INDEX} idx_corpus ON bitexts (corpus,version)" | sqlite3 $@
+##
+## delete previous (add above in the part where things are removed):
+##
+#	      echo "DELETE FROM bitexts WHERE corpus='$$c' AND version='$$v'" | ${SQLITE3} ${TMP_LINK_DB}; \
+##
+## add latest (add above in the part where latest release info is added):
+##
+#	      echo "ATTACH DATABASE '${LINK_DB}' as l; \
+#	            ${INSERT_INTO} bitexts SELECT rowid, corpus, version, fromDoc, toDoc \
+#	                                   FROM l.bitexts \
+#                                          WHERE corpus='$$c' AND version='$$l';" \
+#	      | ${SQLITE3} ${TMP_LINK_DB}; \
+##
+## this is not compatible with the current way of adding the entire bitexts table
+## from the LINK_DB (because this uses rowid as the unique bitext ID)
+## see target ${LATEST_LINK_DB} where the bitexts table is simply dumped into the LATEST_LINK_DB
+##-----------------------------------------------------------------------------
 
 
 
@@ -576,7 +590,33 @@ ${LATEST_LINK_DB_MERGED}: ${TMP_LINK_DB}
 
 LANGPAIR_DBS = $(wildcard *-*.db)
 
+
 bitexts.db: ${LANGPAIR_DBS}
+	echo "${CREATE_TABLE} bitexts (bitextID,corpus TEXT,version TEXT,fromDoc TEXT,toDoc TEXT)" | sqlite3 $@
+	echo "${CREATE_UNIQUE_INDEX} idx_bitexts ON bitexts (corpus,version,fromDoc,toDoc)" | sqlite3 $@
+	echo "${CREATE_UNIQUE_INDEX} idx_bitext_ids ON bitexts (bitextID)" | sqlite3 $@
+	echo "${CREATE_INDEX} idx_corpus ON bitexts (corpus,version)" | sqlite3 $@
+	echo "${CREATE_TABLE} corpora (corpus TEXT,version TEXT,srclang TEXT,trglang TEXT,srclang3 TEXT,trglang3 TEXT)" | sqlite3 $@
+	echo "${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3)" | sqlite3 $@
+	for d in $?; do \
+	  echo "processing $$d"; \
+	  echo "ATTACH DATABASE '$$d' as l; \
+	        ${INSERT_INTO} bitexts SELECT rowid, corpus, version, fromDoc, toDoc FROM l.bitexts; \
+		${INSERT_INTO} corpora SELECT * FROM l.corpora;" | sqlite3 $@; \
+	done
+
+
+## OLD: add language to bitext tables --> avoid this expensive procedure
+##      ---> now only in corpora table (see above) copied from existing databases
+##
+## - copy from tables in alignment database and add language information
+## - this very inefficident as the individual link files do not include language info
+##   --> OPUS language IDs have to be inferred from the document paths
+##   --> this is slow and error prone
+##   --> should be changed in the future
+##   --> or we only use the bitexts.db as the central database anyway
+
+bitexts-old.db: ${LANGPAIR_DBS}
 	echo "${CREATE_TABLE} bitexts ( bitextID, corpus TEXT, version TEXT, fromDoc TEXT, toDoc TEXT, \
                                         srclang TEXT, trglang TEXT, srclang3 TEXT, trglang3 TEXT )" \
 		| sqlite3 $@
@@ -602,9 +642,89 @@ bitexts.db: ${LANGPAIR_DBS}
 	     | sqlite3 $@; \
 	   done \
 	done
-	echo "${CREATE_TABLE} aligned_corpora ( corpus TEXT, version TEXT, srclang TEXT, trglang TEXT, srclang3 TEXT, trglang3 TEXT)" | sqlite3 $@
-	echo "${CREATE_UNIQUE_INDEX} idx_aligned_corpora ON aligned_corpora (corpus,version,srclang,trglang,srclang3,trglang3)" | sqlite3 $@
-	echo "${INSERT_INTO} aligned_corpora SELECT DISTINCT corpus,version,srclang,trglang,srclang3,trglang3 FROM bitexts" | sqlite3 $@
+	echo "${CREATE_TABLE} corpora (corpus TEXT,version TEXT,srclang TEXT,trglang TEXT,srclang3 TEXT,trglang3 TEXT)" | sqlite3 $@
+	echo "${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3)" | sqlite3 $@
+	echo "${INSERT_INTO} corpora SELECT DISTINCT corpus,version,srclang,trglang,srclang3,trglang3 FROM bitexts" | sqlite3 $@
+
+
+##--------------------------------------------------
+## add corpora tables that include language info
+## --> just in case this has not been done yet
+##--------------------------------------------------
+
+CORPORA_LINK_DBS = $(patsubst %.db,%.corpora.db,$(wildcard *-*.db) $(wildcard sqlite/*-*.db))
+
+add-corpora2linkdb: $(CORPORA_LINK_DBS)
+
+%.corpora.db: %.db
+	echo "${CREATE_TABLE} corpora (corpus TEXT,version TEXT,srclang TEXT,trglang TEXT,srclang3 TEXT,trglang3 TEXT)" | sqlite3 $<
+	echo "${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3)" | sqlite3 $<
+	( S=$(firstword $(subst -, ,$(notdir $(<:.db=)))); \
+	  T=$(lastword $(subst -, ,$(notdir $(<:.db=)))); \
+	  P=`echo "select fromDoc,toDoc from bitexts" | sqlite3 -separator " " $< | sed 's/\/[^ ]* /-/' | cut -f1 -d/ | sort -u | xargs`; \
+	  for p in $$P; do \
+	    s=`echo $$p | cut -f1 -d-`; \
+	    t=`echo $$p | cut -f2 -d-`; \
+	    echo "$$s $$t $$S $$T"; \
+	    echo "${INSERT_INTO} corpora SELECT DISTINCT corpus, version,'$$s','$$t','$$S','$$T' \
+                                         FROM bitexts \
+	                                 WHERE fromDoc LIKE '$$s/%' AND toDoc LIKE '$$t/%';" \
+	    | sqlite3 $<; \
+	  done )
+	${SCRIPTDIR}add_corpus_range.py $<
+
+
+##--------------------------------------------------
+## check corpus ranges
+## - re-run link extraction if there are overlaps in rowid ranges
+##--------------------------------------------------
+
+CHECK_LINK_DBS = $(patsubst %.db,%.check.db,$(wildcard *-*.db))
+
+check-linkdb-overlaps: $(CHECK_LINK_DBS)
+remove-linkdb-overlaps:
+	${MAKE} RERUN_LINK_EXTRACTION=1 check-linkdb-overlaps
+
+%.check.db: %.db
+	if [ ! -s $< ]; then \
+	  if [ -s $<.backup ]; then mv -f $<.backup $<; fi; \
+	  if [ -s sqlite/$<.backup ]; then mv -f sqlite/$<.backup sqlite/$<; fi; \
+	fi
+	${MAKE} $(<:.db=.corpora.db)
+	if [ `scripts/check_corpus_ranges.py $< | wc -l` -gt 0 ]; then \
+	  echo "# overlaps in $<"; \
+	  P=`scripts/check_corpus_ranges.py $< | cut -f3,4 -d, | cut -f1 -d' ' | sort -u | tr ',' '-'`;\
+	  if [ "${RERUN_LINK_EXTRACTION}" == "1" ]; then \
+	    mv $< $<.backup; \
+	    mv sqlite/$< sqlite/$<.backup; \
+	  fi; \
+	  for p in $$P; do \
+	    s=`echo $$p | cut -f1 -d-`; \
+	    t=`echo $$p | cut -f2 -d-`; \
+	    if [ $$s \< $$t ]; then l="$$s-$$t"; else l="$$t-$$s"; fi; \
+	    echo "find done -name '$$l.*' -delete"; \
+	    echo "find sqlite -name '$$p.*' -delete"; \
+	    echo "make LANGPAIR=$$l all-links"; \
+	    if [ "${RERUN_LINK_EXTRACTION}" == "1" ]; then \
+	      find done -name "$$l.*" -delete; \
+	      find sqlite -name "$$p.*" -delete; \
+	      ${MAKE} LANGPAIR=$$l all-links; \
+	    fi; \
+	  done; \
+	fi
+
+BACKUP_LINK_DBS = $(wildcard *-*.db.backup) $(wildcard sqlite/*-*.db.backup)
+
+restore-linkdb-backups:
+	@for f in ${BACKUP_LINK_DBS}; do \
+	  d=`echo $$f | sed 's/\.backup$$//'`; \
+	  if [ ! -s $$d ]; then \
+	    if [ -s $$f ]; then \
+	      echo "mv -f $$f $$d"; \
+	      mv -f $$f $$d; \
+	    fi \
+	  fi \
+	done
 
 
 ##------------------------------------------------------------------------------------
