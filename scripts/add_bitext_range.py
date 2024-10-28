@@ -22,12 +22,17 @@ linksDBcur.execute("CREATE TABLE IF NOT EXISTS bitext_range (bitextID INTEGER NO
 
 for bitext in bitextDBcur.execute(f"SELECT DISTINCT bitextID FROM links"):
     bitextID = bitext[0]
-    # print(f"now processing {bitextID}")
-    for rowids in linksDBcur.execute(f"SELECT MIN(rowid),MAX(rowid) FROM links WHERE bitextID={bitextID}"):
-        start = rowids[0]
-        end = rowids[1]
-        # print(f"INSERT OR IGNORE INTO bitext_range VALUES ({bitextID},{start},{end})")
-        linksDBcur.execute(f"INSERT OR IGNORE INTO bitext_range VALUES ({bitextID},{start},{end})")
-        linksDBcur.execute(f"UPDATE bitext_range SET start={start},end={end} WHERE bitextID={bitextID}")
+
+    linksDBcur.execute(f"SELECT rowid FROM bitext_range WHERE bitextID={bitextID}")
+    data=linksDBcur.fetchone()
+    if data is None:
+    
+        # print(f"now processing {bitextID}")    
+        for rowids in linksDBcur.execute(f"SELECT MIN(rowid),MAX(rowid) FROM links WHERE bitextID={bitextID}"):
+            start = rowids[0]
+            end = rowids[1]
+            # print(f"INSERT OR IGNORE INTO bitext_range VALUES ({bitextID},{start},{end})")
+            linksDBcur.execute(f"INSERT OR IGNORE INTO bitext_range VALUES ({bitextID},{start},{end})")
+            # linksDBcur.execute(f"UPDATE bitext_range SET start={start},end={end} WHERE bitextID={bitextID}")
 
 linksDBcon.commit()

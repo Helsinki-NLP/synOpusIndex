@@ -8,7 +8,8 @@ import sqlite3
 import os, traceback
 
 if len(sys.argv) != 7:
-    print("USAGE: corpuslinks.py xx-yy.db xx.ids.db yy.ids.db xx-yy.linked.db corpus version")
+    print("USAGE: links2sqlite.py xx-yy.db xx.ids.db yy.ids.db xx-yy.linked.db corpus version")
+    print(sys.argv)
     exit()
 
 algDB = sys.argv[1]
