@@ -44,6 +44,7 @@ else
 endif
 
 LINK2SQLITE  := ${SCRIPTDIR}links2sqlite.py
+ALG2LINKS    := ${SCRIPTDIR}alg2links.py
 
 
 
@@ -77,6 +78,10 @@ ALL_ALG_URLS  := $(sort $(patsubst %,https:%,$(shell find ${OPUSRELEASE}/ -name 
 						xargs grep 'xml/${LANGPAIR}.xml.gz' | cut -f4 -d:)))
 ALL_ALG_DONE  := $(patsubst ${STORAGE_BASE}%.xml.gz,done/%.done,${ALL_ALG_URLS})
 ALL_LINK_DONE := $(patsubst ${STORAGE_BASE}%.xml.gz,done/%.linkdb.done,${ALL_ALG_URLS})
+ALL_LINKS_DONE := $(patsubst ${STORAGE_BASE}%/xml/,done/%/${LANGPAIR3}.done,$(dir ${ALL_ALG_URLS}))
+
+ALL_ALG_CORPORA_DONE  := $(patsubst ${STORAGE_BASE}%.xml.gz,done/%.corpora.done,${ALL_ALG_URLS})
+
 
 
 ## alignment databases
@@ -86,6 +91,7 @@ ALL_LINK_DONE := $(patsubst ${STORAGE_BASE}%.xml.gz,done/%.linkdb.done,${ALL_ALG
 ##   OLDER_LINK_DB  = links from other releases (pointing to sentence index IDs)
 
 ALIGN_DB       := ${LANGPAIR3}.db
+LINK_DB        := linkdb/${LANGPAIR3}.db
 LATEST_LINK_DB := sqlite/${LANGPAIR3}.db
 OLDER_LINK_DB  := sqlite/${LANGPAIR3}.releases.db
 
@@ -107,6 +113,7 @@ TRGLANG_IDX_DB   := ${TRGLANG3}.ids.db
 		${LANGUAGE_IDX_DB} \
 		${LANGUAGE_FTS_DB} \
 		${ALIGN_DB} \
+		${LINK_DB} \
 		${LANGUAGE_DEDUP} \
 		${LATEST_LINK_DB} \
 		${OLDER_LINK_DB}
@@ -148,53 +155,66 @@ all-mono:
 .PHONY: all-links
 all-links:
 	@$(call retrieve,${ALIGN_DB})
-	@$(call retrieve,${LATEST_LINK_DB})
-	@$(call retrieve,${OLDER_LINK_DB})
+	@$(call retrieve,${LINK_DB})
 	${MAKE} aligndb-local
 	${MAKE} linkdb-local
+
+#	@$(call retrieve,${LATEST_LINK_DB})
+#	@$(call retrieve,${OLDER_LINK_DB})
 
 
 .PHONY: aligndb
 aligndb: ${ALIGN_DB}
 
 .PHONY: linkdb
-linkdb: ${LATEST_LINK_DB}
-
+linkdb: ${LINK_DB}
+# linkdb: ${LATEST_LINK_DB}
 
 
 TMP_ALIGN_DB       := ${INDEX_TMPDIR}/${ALIGN_DB}
-TMP_LATEST_LINK_DB := ${INDEX_TMPDIR}/${LATEST_LINK_DB}
-TMP_OLDER_LINK_DB  := ${INDEX_TMPDIR}/${OLDER_LINK_DB}
+TMP_LINK_DB        := ${INDEX_TMPDIR}/${LINK_DB}
+# TMP_LATEST_LINK_DB := ${INDEX_TMPDIR}/${LATEST_LINK_DB}
+# TMP_OLDER_LINK_DB  := ${INDEX_TMPDIR}/${OLDER_LINK_DB}
 
 .PHONY: aligndb-local
 aligndb-local:
 	@$(call lockfile,${ALIGN_DB})
 	@mkdir -p $(dir ${TMP_ALIGN_DB})
-	if [ -s ${ALIGN_DB} ]; then rsync ${ALIGN_DB} ${TMP_ALIGN_DB}; fi
+	@if [ -s ${ALIGN_DB} ]; then rsync ${ALIGN_DB} ${TMP_ALIGN_DB}; fi
 	${MAKE} ALIGN_DB=${TMP_ALIGN_DB} aligndb
-	if [ -s ${TMP_ALIGN_DB} ]; then mv -f ${TMP_ALIGN_DB} ${ALIGN_DB}; fi
+	@if [ -s ${TMP_ALIGN_DB} ]; then mv -f ${TMP_ALIGN_DB} ${ALIGN_DB}; fi
 	@$(call unlockfile,${ALIGN_DB})
 
 .PHONY: linkdb-local
 linkdb-local:
-	@$(call lockfile,${LATEST_LINK_DB})
-	@$(call lockfile,${OLDER_LINK_DB})
-	@echo "make link DBs in ${INDEX_TMPDIR}"
-	@mkdir -p $(dir ${TMP_LATEST_LINK_DB}) $(dir ${TMP_OLDER_LINK_DB})
-	if [ -s ${LATEST_LINK_DB} ]; then rsync ${LATEST_LINK_DB} ${TMP_LATEST_LINK_DB}; fi
-	if [ -s ${OLDER_LINK_DB} ];  then rsync ${OLDER_LINK_DB} ${TMP_OLDER_LINK_DB}; fi
-	@${MAKE} LATEST_LINK_DB=${TMP_LATEST_LINK_DB} OLDER_LINK_DB=${TMP_OLDER_LINK_DB} linkdb
-	if [ -s ${TMP_LATEST_LINK_DB} ]; then mv -f ${TMP_LATEST_LINK_DB} ${LATEST_LINK_DB}; fi
-	if [ -s ${TMP_OLDER_LINK_DB} ];  then mv -f ${TMP_OLDER_LINK_DB} ${OLDER_LINK_DB}; fi
-	@$(call unlockfile,${LATEST_LINK_DB})
-	@$(call unlockfile,${OLDER_LINK_DB})
+	@mkdir -p $(dir ${LINK_DB}) $(dir ${TMP_LINK_DB})
+	@$(call lockfile,${LINK_DB})
+	@if [ -s ${LINK_DB} ]; then rsync ${LINK_DB} ${TMP_LINK_DB}; fi
+	${MAKE} LINK_DB=${TMP_LINK_DB} linkdb
+	@if [ -s ${TMP_LINK_DB} ]; then mv -f ${TMP_LINK_DB} ${LINK_DB}; fi
+	@$(call unlockfile,${LINK_DB})
+
+
+# linkdb-local-old:
+# 	@$(call lockfile,${LATEST_LINK_DB})
+# 	@$(call lockfile,${OLDER_LINK_DB})
+# 	@echo "make link DBs in ${INDEX_TMPDIR}"
+# 	@mkdir -p $(dir ${TMP_LATEST_LINK_DB}) $(dir ${TMP_OLDER_LINK_DB})
+# 	if [ -s ${LATEST_LINK_DB} ]; then rsync ${LATEST_LINK_DB} ${TMP_LATEST_LINK_DB}; fi
+# 	if [ -s ${OLDER_LINK_DB} ];  then rsync ${OLDER_LINK_DB} ${TMP_OLDER_LINK_DB}; fi
+# 	@${MAKE} LATEST_LINK_DB=${TMP_LATEST_LINK_DB} OLDER_LINK_DB=${TMP_OLDER_LINK_DB} linkdb
+# 	if [ -s ${TMP_LATEST_LINK_DB} ]; then mv -f ${TMP_LATEST_LINK_DB} ${LATEST_LINK_DB}; fi
+# 	if [ -s ${TMP_OLDER_LINK_DB} ];  then mv -f ${TMP_OLDER_LINK_DB} ${OLDER_LINK_DB}; fi
+# 	@$(call unlockfile,${LATEST_LINK_DB})
+# 	@$(call unlockfile,${OLDER_LINK_DB})
 
 
 
 
-HPLT_LANGS := ar bs ca et eu fi ga gl hi hr is mk mt nn sq sr sw zh_hant
+HPLT_LANGS := ar bs ca et en eu fi ga gl hi hr is mk mt nn sq sr sw zh_hant
 HPLT_PAIRS := $(foreach s,${HPLT_LANGS},$(foreach t,${HPLT_LANGS},$s-$t))
 HPLT_ZH := $(foreach s,${HPLT_LANGS},$s-zh_hant)
+HPLT_EN := $(foreach s,${HPLT_LANGS},$s-en en-$s)
 
 hplt-pairs:
 	make LANGPAIRS="${HPLT_PAIRS}" all-langpairs
@@ -202,18 +222,22 @@ hplt-pairs:
 hplt-zh:
 	make LANGPAIRS="${HPLT_ZH}" all-langpairs
 
+hplt-en:
+	make LANGPAIRS="${HPLT_EN}" all-langpairs
+
 zh:
 	${MAKE} LANGPAIRS="en-zh en-zh_hant en-zh_cn en-zh_tw en_yue cmn-en" all-langpairs
 
-hbs:
-	${MAKE} LANGPAIRS="bs-en en-hr en-sr" all-langpairs
+redo-done:
+	${MAKE} LANGPAIRS="$(shell find done -mindepth 4 -name '*-*.done' | cut -f5 -d/ | cut -f1 -d. | sort -u)" all-langpairs
+
 
 all-langpairs: ${LANGPAIRS}
 
 ${LANGPAIRS}:
 	@if [ $(firstword $(subst -, ,$@)) \< $(lastword $(subst -, ,$@)) ]; then \
-	  echo "make LANGPAIR=$@ all-links"; \
-	  make LANGPAIR=$@ all-links; \
+	  echo "make -j1 LANGPAIR=$@ all-links"; \
+	  make -j1 LANGPAIR=$@ all-links; \
 	fi
 
 .PHONY: check-links
@@ -395,14 +419,76 @@ ${ALL_ALG_DONE}:
 	@wget -qq -O - $(patsubst done/%.done,${STORAGE_BASE}%.xml.gz,$@) \
 	| gzip -cd \
 	| ${ALG2SQLITE} -d ${ALIGN_DB} -c $(word 2,$(subst /, ,$@)) -v $(word 3,$(subst /, ,$@))
-	@echo "${INSERT_INTO} corpora VALUES('$(word 2,$(subst /, ,$@))', \
-                                             '$(word 3,$(subst /, ,$@))', \
-                                             '${SRCLANG}','${TRGLANG}', \
-                                             '${SRCLANG3}','${TRGLANG3}')" \
-	| sqlite3 ${ALIGN_DB}
+	@( c=$(word 2,$(subst /, ,$@)); \
+	   v=$(word 3,$(subst /, ,$@)); \
+	   l=`grep 'latest_release:' ${OPUSRELEASE}/$$c/info.yaml | cut -f2 -d' ' | xargs`; \
+	   if [ ! -e ${OPUSRELEASE}/$$c/$$l/statistics.yaml ] || \
+	      [ `grep '$(notdir $(@:.done=.xml.gz))' ${OPUSRELEASE}/$$c/$$l/statistics.yaml | wc -l` -eq 0 ]; then \
+	      l=`grep '$(notdir $(@:.done=.xml.gz))' ${OPUSRELEASE}/$$c/index.txt | tail -1 | cut -f1 -d/`; \
+	   fi; \
+	   if [ "$$v" == "$$l" ]; then \
+	     echo "release $$v is the latest release for $$c"; \
+	     echo "UPDATE corpora SET latest=0 WHERE corpus='$$c' AND srclang='${SRCLANG}' AND trglang='${TRGLANG}'; \
+	           ${INSERT_INTO} corpora VALUES('$$c','$$v','${SRCLANG}','${TRGLANG}','${SRCLANG3}','${TRGLANG3}',1);" \
+	     | sqlite3 ${ALIGN_DB}; \
+	   else \
+	     echo "release $$v is an older release for $$c"; \
+	     echo "${INSERT_INTO} corpora VALUES('$$c','$$v','${SRCLANG}','${TRGLANG}','${SRCLANG3}','${TRGLANG3}',0)" \
+	     | sqlite3 ${ALIGN_DB}; \
+	   fi )
 	@$(call unlockfile,${ALIGN_DB})
 	@mkdir -p $(dir $@)
 	@touch $@
+
+
+
+
+# ## add correct corpora table with column for indicating the latest release
+
+# DONE_LANGPAIRS = $(shell find done -name '*-*.done' | cut -f5 -d/ | cut -f1 -d. | sort -u)
+
+# correct-all-corpus-table:
+# 	find done -name '*.corpora.done' -delete
+# 	for d in $(wildcard *-*.db); do \
+# 	  echo "DROP TABLE IF EXISTS corpora" | sqlite3 $$d; \
+# 	done
+# 	for p in ${DONE_LANGPAIRS}; do \
+# 	  echo "make LANGPAIR=$$p correct-corpus-table"; \
+# 	  make LANGPAIR=$$p correct-corpus-table; \
+# 	done
+
+
+# correct-corpus-table:
+# 	@$(call lockfile,${ALIGN_DB})
+# 	@$(call update_algdb,${ALIGN_DB})
+# 	@${MAKE} add-correct-corpus-table
+# 	@$(call unlockfile,${ALIGN_DB})
+
+# add-correct-corpus-table: ${ALL_ALG_CORPORA_DONE}
+
+# ${ALL_ALG_CORPORA_DONE}:
+# 	@echo "processing $(@:.corpora.done=.xml.gz)"
+# 	@mkdir -p $(dir ${ALIGN_DB})
+# 	@( c=$(word 2,$(subst /, ,$@)); \
+# 	   v=$(word 3,$(subst /, ,$@)); \
+# 	   l=`grep 'latest_release:' ${OPUSRELEASE}/$$c/info.yaml | cut -f2 -d' ' | xargs`; \
+# 	   if [ ! -e ${OPUSRELEASE}/$$c/$$l/statistics.yaml ] || \
+# 	      [ `grep '$(notdir $(@:.corpora.done=.xml.gz))' ${OPUSRELEASE}/$$c/$$l/statistics.yaml | wc -l` -eq 0 ]; then \
+# 	      l=`grep '$(notdir $(@:.corpora.done=.xml.gz))' ${OPUSRELEASE}/$$c/index.txt | tail -1 | cut -f1 -d/`; \
+# 	   fi; \
+# 	   if [ "$$v" == "$$l" ]; then \
+# 	     echo "release $$v is the latest release for $$c"; \
+# 	     echo "UPDATE corpora SET latest=0 WHERE corpus='$$c' AND srclang='${SRCLANG}' AND trglang='${TRGLANG}'; \
+# 	           ${INSERT_INTO} corpora VALUES('$$c','$$v','${SRCLANG}','${TRGLANG}','${SRCLANG3}','${TRGLANG3}',1);" \
+# 	     | sqlite3 ${ALIGN_DB}; \
+# 	   else \
+# 	     echo "release $$v is an older release for $$c"; \
+# 	     echo "${INSERT_INTO} corpora VALUES('$$c','$$v','${SRCLANG}','${TRGLANG}','${SRCLANG3}','${TRGLANG3}',0)" \
+# 	     | sqlite3 ${ALIGN_DB}; \
+# 	   fi )
+# 	@mkdir -p $(dir $@)
+# 	@touch $@
+
 
 
 
@@ -416,13 +502,49 @@ CREATE_ALGDB := \
 	  ${CREATE_UNIQUE_INDEX} idx_links ON links (bitextID,srcIDs,trgIDs) ;\
 	  ${CREATE_INDEX} idx_bitextid ON links (bitextID); \
 	  ${CREATE_INDEX} idx_aligntype ON links (bitextID,alignType); \
-	  ${CREATE_TABLE} corpora (corpus TEXT,version TEXT,srclang TEXT,trglang TEXT,srclang3 TEXT,trglang3 TEXT); \
-	  ${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3); \
+	  ${CREATE_TABLE} corpora (corpus TEXT,version TEXT,srclang TEXT,trglang TEXT,srclang3 TEXT,trglang3 TEXT,latest INTEGER); \
+	  ${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3,latest); \
+	  ${CREATE_UNIQUE_INDEX} idx_release ON corpora (corpus,version,srclang,trglang); \
 	  PRAGMA journal_mode=WAL;
 
 create_algdb =	if [ ! -s $1 ]; then echo "create $1";mkdir -p $(dir $1); echo "${CREATE_ALGDB}" | ${SQLITE3} $1; fi
+update_algdb =	echo "create $1";mkdir -p $(dir $1); echo "${CREATE_ALGDB}" | ${SQLITE3} $1;
 
 
+
+
+##--------------------------------------------------------------------------------
+## database of linked source and target sentences
+##  --> maps internal sentence IDs to internal link IDs
+##--------------------------------------------------------------------------------
+
+${LINK_DB}: ${ALL_LINKS_DONE}
+
+LINKDB_PREREQ_TMPDIR := ${INDEX_TMPDIR}/linkdbtmp
+TMP_ALIGNMENT_DB     := ${LINKDB_PREREQ_TMPDIR}/${ALIGN_DB}
+TMP_SRCLANG_IDX_DB   := ${LINKDB_PREREQ_TMPDIR}/${SRCLANG_IDX_DB}
+TMP_TRGLANG_IDX_DB   := ${LINKDB_PREREQ_TMPDIR}/${TRGLANG_IDX_DB}
+LINKDB_PREREQUISITES := ${TMP_ALIGNMENT_DB} ${TMP_SRCLANG_IDX_DB} ${TMP_TRGLANG_IDX_DB}
+
+.INTERMEDIATE: ${LINKDB_PREREQUISITES}
+${LINKDB_PREREQUISITES}: ${LINKDB_PREREQ_TMPDIR}/%: %
+	mkdir -p $(dir $@)
+	rsync -av $< $@
+
+${ALL_LINKS_DONE}: ${LINKDB_PREREQUISITES}
+	@echo "processing $(@:.done=.xml.gz)"
+	@mkdir -p $(dir ${LINK_DB})
+	@$(call lockfile,${LINK_DB})
+	${ALG2LINKS} 	-l ${LINK_DB} \
+			-a ${TMP_ALIGNMENT_DB} \
+			-s ${TMP_SRCLANG_IDX_DB} \
+			-t ${TMP_TRGLANG_IDX_DB} \
+			-c $(word 2,$(subst /, ,$@)) \
+			-v $(word 3,$(subst /, ,$@)) \
+			-s3 ${SRCLANG3} \
+			-t3 ${TRGLANG3}
+	@$(call unlockfile,${LINK_DB})
+	@touch $@
 
 
 ##--------------------------------------------------------------------------------
@@ -450,32 +572,42 @@ ${LATEST_LINK_DB}: ${ALL_LINK_DONE}
 ## SQL comands to create a link database
 
 CREATE_LINKDB := \
-	${CREATE_TABLE} linkedsource (sentID INTEGER,linkID INTEGER,bitextID INTEGER,PRIMARY KEY(linkID,sentID) ); \
-	${CREATE_TABLE} linkedtarget (sentID INTEGER,linkID INTEGER,bitextID INTEGER,PRIMARY KEY(linkID,sentID) ); \
-	${CREATE_INDEX} idx_linkedsource_bitext ON linkedsource (bitextID,sentID) ; \
-	${CREATE_INDEX} idx_linkedtarget_bitext ON linkedtarget (bitextID,sentID) ;\
+	${CREATE_TABLE} linkedsource (sentID INTEGER,linkID INTEGER,bitextID INTEGER,corpusID INTEGER,\
+	                PRIMARY KEY(linkID,sentID) ); \
+	${CREATE_TABLE} linkedtarget (sentID INTEGER,linkID INTEGER,bitextID INTEGER,corpusID INTEGER,\
+	                PRIMARY KEY(linkID,sentID) ); \
+	${CREATE_INDEX} idx_linkedsource_bitext ON linkedsource (corpusID,bitextID,sentID) ; \
+	${CREATE_INDEX} idx_linkedtarget_bitext ON linkedtarget (corpusID,bitextID,sentID) ;\
 	${CREATE_INDEX} idx_linkedsource_linkid ON linkedsource (linkID); \
 	${CREATE_INDEX} idx_linkedtarget_linkid ON linkedtarget (linkID); \
 	${CREATE_INDEX} idx_linkedsource_sentid ON linkedsource (sentID); \
 	${CREATE_INDEX} idx_linkedtarget_sentid ON linkedtarget (sentID); \
 	${CREATE_TABLE} links (linkID INTEGER NOT NULL PRIMARY KEY,bitextID, \
-                                      srcIDs TEXT,trgIDs TEXT,srcSentIDs TEXT,trgSentIDs TEXT, \
-                                      alignType TEXT,alignerScore REAL,cleanerScore REAL); \
+                               srcIDs TEXT,trgIDs TEXT,srcSentIDs TEXT,trgSentIDs TEXT, \
+                               alignType TEXT,alignerScore REAL,cleanerScore REAL); \
 	${CREATE_UNIQUE_INDEX} idx_links ON links (bitextID,srcIDs,trgIDs); \
 	${CREATE_INDEX} idx_aligntype ON links (bitextID,alignType); \
 	${CREATE_INDEX} idx_bitextid ON links (bitextID); \
-	${CREATE_TABLE} corpora (corpus TEXT,version TEXT,srclang TEXT,trglang TEXT,srclang3 TEXT,trglang3 TEXT); \
-	${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3); \
-	${CREATE_TABLE} bitexts (corpus TEXT,version TEXT,fromDoc TEXT,toDoc TEXT); \
+	${CREATE_TABLE} corpora (corpusID INTEGER NOT NULL PRIMARY KEY,\
+	                         corpus TEXT,version TEXT,srclang TEXT,trglang TEXT,\
+	                         srclang3 TEXT,trglang3 TEXT,latest INTEGER); \
+	${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3,latest); \
+	${CREATE_UNIQUE_INDEX} idx_release ON corpora (corpus,version,srclang,trglang); \
+	${CREATE_TABLE} bitexts (bitextID INTEGER NOT NULL PRIMARY KEY,\
+	                         corpus TEXT,version TEXT,fromDoc TEXT,toDoc TEXT); \
 	${CREATE_UNIQUE_INDEX} idx_bitexts ON bitexts (corpus,version,fromDoc,toDoc); \
-	ATTACH DATABASE '${ALIGN_DB}' as l; \
-	${INSERT_INTO} bitexts SELECT * FROM l.bitexts ORDER BY rowid; \
 	PRAGMA journal_mode=WAL;
+
+#	ATTACH DATABASE '${ALIGN_DB}' as l; \
+#	${INSERT_INTO} bitexts SELECT * FROM l.bitexts ORDER BY rowid;
+
 
 
 ## additional helper functions and variables
 
 create_linkdb =	if [ ! -s $1 ]; then echo "create $1";mkdir -p $(dir $1); echo "${CREATE_LINKDB}" | ${SQLITE3} $1; fi
+update_linkdb =	echo "create $1";mkdir -p $(dir $1); echo "${CREATE_LINKDB}" | ${SQLITE3} $1;
+
 
 LINKDB_MATCH_CORPUS      := corpus='$$c' AND srclang='${SRCLANG}' AND trglang='${TRGLANG}'
 LINKDB_MATCH_CORPUS_DOCS := corpus='$$c' AND fromDoc LIKE '${SRCLANG}/%' AND toDoc LIKE '${TRGLANG}/%'
@@ -483,17 +615,6 @@ LINKDB_CORPUS_SELECT     := SELECT DISTINCT rowid FROM bitexts WHERE ${LINKDB_MA
 LINKDB_MATCH_BITEXT      := bitextID IN ( ${LINKDB_CORPUS_SELECT} )
 LINKDB_COUNT_RELEASES    := echo "SELECT rowid FROM corpora WHERE ${LINKDB_MATCH_CORPUS}" \
 				| ${SQLITE3} ${LATEST_LINK_DB} | wc -l
-
-LINKDB_PREREQ_TMPDIR := ${INDEX_TMPDIR}/linkdb
-
-LINKDB_PREREQUISITES := ${LINKDB_PREREQ_TMPDIR}/${ALIGN_DB} \
-			${LINKDB_PREREQ_TMPDIR}/${SRCLANG_IDX_DB} \
-			${LINKDB_PREREQ_TMPDIR}/${TRGLANG_IDX_DB}
-
-.INTERMEDIATE: ${LINKDB_PREREQUISITES}
-${LINKDB_PREREQUISITES}: ${LINKDB_PREREQ_TMPDIR}/%: %
-	mkdir -p $(dir $@)
-	rsync -av $< $@
 
 
 ## extract linkdb data for a given corpus release
@@ -610,8 +731,9 @@ CORPORA_LINK_DBS = $(patsubst %.db,%.corpora.db,$(wildcard *-*.db) $(wildcard sq
 add-corpora2linkdb: $(CORPORA_LINK_DBS)
 
 %.corpora.db: %.db
-	echo "${CREATE_TABLE} corpora (corpus TEXT,version TEXT,srclang TEXT,trglang TEXT,srclang3 TEXT,trglang3 TEXT)" | sqlite3 $<
-	echo "${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3)" | sqlite3 $<
+	echo "${CREATE_TABLE} corpora (corpus TEXT,version TEXT,srclang TEXT,trglang TEXT,srclang3 TEXT,trglang3 TEXT,latest INTEGER)" | sqlite3 $<
+	echo "${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3,latest)" | sqlite3 $<
+	echo "${CREATE_UNIQUE_INDEX} idx_release ON corpora (corpus,version,srclang,trglang)" | sqlite3 $<
 	( S=$(firstword $(subst -, ,$(notdir $(<:.db=)))); \
 	  T=$(lastword $(subst -, ,$(notdir $(<:.db=)))); \
 	  P=`echo "select fromDoc,toDoc from bitexts" | sqlite3 -separator " " $< | sed 's/\/[^ ]* /-/' | cut -f1 -d/ | sort -u | xargs`; \
