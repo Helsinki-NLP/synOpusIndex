@@ -68,9 +68,26 @@ This database has the same structure as the sentence DB but uses the FTS5 extens
 
 
 
-## Bitext alignment DB `xx-yy.db`
+## Bitext alignment DB `xxx-yyy.db`
 
-Sentence alignments are stored per language pair (source language `xx` and target language `yy`). There are two tables in the database similar to the monolingual sentence index DB:
+Sentence alignments are stored per language pair (source language `xxx` and target language `yyy` using ISO-639-3 language codes). There are three tables in the database similar to the monolingual sentence index DB but here focusing on bitexts and alignments:
+
+
+* Table `corpora`:
+
+| column      | type           |
+|-------------|----------------|
+| rowid       | INTEGER UNIQUE |
+| corpus      | TEXT           |
+| version     | TEXT           |
+| srclang     | TEXT           |
+| trglang     | TEXT           |
+| srclang3    | TEXT           |
+| trglang3    | TEXT           |
+| latest      | INTEGER        |
+
+The `rowid` will provide the internal ID used for the parallel corpus (referring to a specific language pair and corpus release, i.e. corpus/version/srclang-trglang). The original language IDs of the source language and target language used in OPUS are stored in `srclang` and `trglang`. Their mapping to 3-letter codes from ISO-639-3 (using macro-language codes if available) is stored in `srclang3` and `trglang3`.
+
 
 * Table `bitexts`:
 
@@ -83,7 +100,7 @@ Sentence alignments are stored per language pair (source language `xx` and targe
 | toDoc       | TEXT           |
 
 
-All information is directly taken from the XCES Align files in OPUS. `fromDoc` corresponds to the document name in the source language and `toDoc` to the aligned document in the target language. The automatically assigned `rowid` is, again, taken as a unique document ID (of this bitext). There is a unique index over columns (corpus, version, fromDoc, toDoc).
+All information is directly taken from the XCES Align files in OPUS. `fromDoc` corresponds to the document name in the source language and `toDoc` to the aligned document in the target language. The automatically assigned `rowid` is, again, taken as a unique document ID (of this bitext). There is a unique index over columns (corpus, version, fromDoc, toDoc). `latest` is a binary flag with `1` indicating that this version is the latest release of that corpus.
 
 
 * Table `links`:
@@ -105,9 +122,9 @@ Similar to the sentence index DB, there is also a view `alignments` defined over
 
 
 
-## Sentence Link DB `sqlite/xx-yy.db`
+## Sentence Link DB `linkdb/xxx-yyy.db`
 
-In order to search and browse through the bitexts in OPUS, there are also the following tables extracted from the databases described above. Those tables map internal sentence IDs to sentence alignments to avoid expensive joins over the sentence index table. There are three tables in this database:
+In order to search and browse through the bitexts in OPUS, there are also the following tables extracted from the databases described above. Those tables map internal sentence IDs to sentence alignments to avoid expensive joins over the sentence index table. There are four main tables in this database:
 
 * `links`: Similar to the `links` table in the master alignment database but with additional fields `srcSentIDs` and `trgSentIDs` that provide the internal sentence IDs of aligned sentences corresponding to the `rowid` of the sentence table for each language. `linkID` corresponds to `rowid` in the master alignment file
 * `linkedsource`: A table that maps internal sentence IDs of the source language (rowid's in the corresponding sentence DB) to sentence alignment IDs (`linkID` corresponding to `rowid` in the `links` table of the master alignment database)
@@ -130,6 +147,8 @@ There are also indivudual link DB's for each corpus release. They are stored in 
 | alignerScore | REAL           |
 | cleanerScore | REAL           |
 
+The difference to the alignment DB is that we copy the `rowid` into the `linkID` to correctly map links. `srcSentIDs` and `trgSentIDs` have internal sentence IDs in plain text form (as there can be more than one sentence in a link). 
+
 
 * Table `linkedsource`:
 
@@ -138,8 +157,9 @@ There are also indivudual link DB's for each corpus release. They are stored in 
 | sentID       | INTEGER        |
 | linkID       | INTEGER        |
 | bitextID     | INTEGER        |
+| corpusID     | INTEGER        |
 
-`(sentID,linkID)` is used as a unique primary key.
+`(sentID,linkID)` is used as a unique primary key. `bitextID` and `corpusID` are added to make it possible to restrict the search to specific bitexts or parallel corpora.
 
 
 * Table `linkedtarget`:
@@ -149,22 +169,62 @@ There are also indivudual link DB's for each corpus release. They are stored in 
 | sentID       | INTEGER        |
 | linkID       | INTEGER        |
 | bitextID     | INTEGER        |
+| corpusID     | INTEGER        |
 
 `(sentID,linkID)` is used as a unique primary key.
 
 
 
-* Table `bitexts`:
-
-This is basically a copy of the same table from the bitext alignment DB `xx-yy.db` above.
+* Table `corpora`:
 
 | column      | type           |
 |-------------|----------------|
-| rowid       | INTEGER UNIQUE |
+| corpusID    | INTEGER UNIQUE |
+| corpus      | TEXT           |
+| version     | TEXT           |
+| srclang     | TEXT           |
+| trglang     | TEXT           |
+| srclang3    | TEXT           |
+| trglang3    | TEXT           |
+| latest      | INTEGER        |
+
+
+This table is similar to the one in the master alignment DB but uses `corpusID` to correctly map the ID from that DB even if not all corpora are present in this DB. Only corpora added to the DB will be listed here.
+
+
+
+* Table `bitexts`:
+
+This is basically a copy of the same table from the bitext alignment DB `xx-yy.db` above but, again, using `bitextID` instead of `rowid` to properly map between the two.
+
+| column      | type           |
+|-------------|----------------|
+| bitextID    | INTEGER UNIQUE |
 | corpus      | TEXT           |
 | version     | TEXT           |
 | fromDoc     | TEXT           |
 | toDoc       | TEXT           |
+
+
+
+
+* Table `corpus_range` and `bitext_range`:
+
+There are two additional tables to facilitate browsing through a coprus and a bitext with the possibility to jump to different positions. We assume links to appear without gaps in the `links` table and the following two tables save the first and last `linkID` for a parallel corpus or a bitext, respectively. With that we know the range of links in the alignment table that correspond to a specific corpus or bitext. The `corpus_range` table:
+
+| column      | type           |
+|-------------|----------------|
+| corpusID    | INTEGER UNIQUE |
+| start       | INTEGER        |
+| end         | INTEGER        |
+
+And similarly the `bitext_range` table:
+
+| column      | type           |
+|-------------|----------------|
+| bitextID    | INTEGER UNIQUE |
+| start       | INTEGER        |
+| end         | INTEGER        |
 
 
 

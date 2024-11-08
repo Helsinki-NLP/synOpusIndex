@@ -45,6 +45,17 @@ cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_links ON links ( bitextID, sr
 cur.execute("CREATE INDEX IF NOT EXISTS idx_aligntype ON links ( bitextID, alignType )")
 cur.execute("CREATE INDEX IF NOT EXISTS idx_bitextid ON links ( bitextID )")
 
+cur.execute("""CREATE TABLE IF NOT EXISTS corpora (corpus TEXT, version TEXT,
+                                                   srclang TEXT, trglang TEXT,
+                                                   srclang3 TEXT, trglang3 TEXT,
+                                                   latest INTEGER)""")
+cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_corpora ON corpora (corpus,version,
+                                                                         srclang,trglang,
+                                                                         srclang3,trglang3,latest)""")
+cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_release ON corpora (corpus,version,srclang,trglang)")
+cur.execute("PRAGMA journal_mode=WAL")
+
+
 
 ## create a view that joins the bitexts and links tables
 
