@@ -268,8 +268,16 @@ upload:
 .PHONY: upload-all
 upload-all:
 	which a-put
-	swift upload OPUS-index ${SWIFT_PARAMS} *.db
-	find linkdb -name '*.db' -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
+	-swift upload OPUS-index ${SWIFT_PARAMS} *.db *.gz
+	-find linkdb -name '*.db' -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
+	rm -f index.txt
+	${MAKE} index.txt
+	find done -name '*.done' | xargs -n 500 git add
+	git add index.txt
+
+upload-all2:
+	which a-put
+	-find linkdb -name '*.db' -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
 	rm -f index.txt
 	${MAKE} index.txt
 	find done -name '*.done' | xargs -n 500 git add
@@ -504,84 +512,6 @@ bitexts.db: ${LANGPAIR_DBS}
 	        ${INSERT_INTO} bitexts SELECT rowid,* FROM l.bitexts; \
 		${INSERT_INTO} corpora SELECT rowid,* FROM l.corpora;" | sqlite3 $@; \
 	done
-
-
-##--------------------------------------------------
-## add corpora tables that include language info
-## --> just in case this has not been done yet
-##--------------------------------------------------
-
-CORPORA_LINK_DBS = $(patsubst %.db,%.corpora.db,$(wildcard *-*.db) $(wildcard linkdb/*-*.db))
-
-add-corpora2linkdb: $(CORPORA_LINK_DBS)
-
-%.corpora.db: %.db
-	echo "${CREATE_TABLE} corpora (corpus TEXT,version TEXT,srclang TEXT,trglang TEXT,srclang3 TEXT,trglang3 TEXT,latest INTEGER)" | sqlite3 $<
-	echo "${CREATE_UNIQUE_INDEX} idx_corpora ON corpora (corpus,version,srclang,trglang,srclang3,trglang3,latest)" | sqlite3 $<
-	echo "${CREATE_UNIQUE_INDEX} idx_release ON corpora (corpus,version,srclang,trglang)" | sqlite3 $<
-	( S=$(firstword $(subst -, ,$(notdir $(<:.db=)))); \
-	  T=$(lastword $(subst -, ,$(notdir $(<:.db=)))); \
-	  P=`echo "select fromDoc,toDoc from bitexts" | sqlite3 -separator " " $< | sed 's/\/[^ ]* /-/' | cut -f1 -d/ | sort -u | xargs`; \
-	  for p in $$P; do \
-	    s=`echo $$p | cut -f1 -d-`; \
-	    t=`echo $$p | cut -f2 -d-`; \
-	    echo "$$s $$t $$S $$T"; \
-	    echo "${INSERT_INTO} corpora SELECT DISTINCT corpus, version,'$$s','$$t','$$S','$$T' \
-                                         FROM bitexts \
-	                                 WHERE fromDoc LIKE '$$s/%' AND toDoc LIKE '$$t/%';" \
-	    | sqlite3 $<; \
-	  done )
-	${SCRIPTDIR}add_corpus_range.py -d $<
-
-
-
-
-CHECK_LINK_DBS = $(patsubst %.db,%.checklinks.db,$(wildcard linkdb/*-*.db))
-
-check-linkdbs: $(CHECK_LINK_DBS)
-
-%.checklinks.db: %.db
-	@echo "testing $<"
-	@for c in `echo "select distinct bitextID from links where srcSentIDs='' or trgSentIDs=''" | sqlite3 $<`; do \
-	  echo "testing bitext $$c"; \
-	  if [ `echo "select rowid from links where bitextID=$$c and srcSentIDs<>'' limit 1" | sqlite3 $< | wc -l` -eq 0 ] || \
-	     [ `echo "select rowid from links where bitextID=$$c and trgSentIDs<>'' limit 1" | sqlite3 $< | wc -l` -eq 0 ]; then \
-	    echo "no links in $< for bitext with ID $$c"; \
-	    echo "delete from links where bitextID=$$c"        | sqlite3 $<; \
-	    echo "delete from linkedsource where bitextID=$$c" | sqlite3 $<; \
-	    echo "delete from linkedtarget where bitextID=$$c" | sqlite3 $<; \
-	    echo "delete from bitexts where bitextID=$$c"      | sqlite3 $<; \
-	    echo "delete from bitext_range where bitextID=$$c" | sqlite3 $<; \
-	  fi \
-	done
-	@for c in `echo "select corpusID,corpus,version,srclang,trglang from corpora" | sqlite3 $<`; do \
-	  I=`echo $$c | cut -f1 -d\|`; \
-	  C=`echo $$c | cut -f2 -d\|`; \
-	  V=`echo $$c | cut -f3 -d\|`; \
-	  S=`echo $$c | cut -f4 -d\|`; \
-	  T=`echo $$c | cut -f5 -d\|`; \
-	  echo "testing corpus $$C/$$V/$$S-$$T ($$I)"; \
-	  if [ `echo "select bitextID from bitexts where corpus='$$C' and version='$$V' and fromDoc like '$$S/%' and toDoc like '$$T/%'" | sqlite3 $< | wc -l` -eq 0 ]; then \
-	    echo "no bitexts in $< for corpus $$C/$$V/$$S-$$T"; \
-	    echo "delete from corpora where corpusID=$$I"      | sqlite3 $<; \
-	    echo "delete from corpus_range where corpusID=$$I" | sqlite3 $<; \
-	    if [ -d done/$$C ]; then \
-	      if [ -d done/$$C/$$V ]; then \
-	        if [ -e done/$$C/$$V/xml/$$S-$$T.done ]; then \
-	          rm -f done/$$C/$$V/xml/$$S-$$T.done; \
-	        elif [ -e done/$$C/$$V/xml/$$T-$$S.done ]; then \
-	          rm -f done/$$C/$$V/xml/$$T-$$S.done; \
-	        fi \
-	      fi \
-	    fi; \
-	  fi \
-	done
-	@echo "VACUUM" | sqlite3 $<
-	@if [ `echo "select corpusID from corpora limit 1" | sqlite3 $< | wc -l` -eq 0 ]; then \
-	  echo "no corpus in $< - remove the database"; \
-	  rm -f $<; \
-	  find done -maxdepth 4 -name '$(notdir $(<:.db=.done))' -delete; \
-	fi
 
 
 
