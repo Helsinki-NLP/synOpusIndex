@@ -80,7 +80,6 @@ ALL_MONO_IDSDONE   := $(patsubst ${INDEX_TMPDIR}/%.dedup,done/%.ids.done,${ALL_M
 ALL_ALG_URLS   := $(sort $(patsubst %,https:%,$(shell find ${OPUSRELEASE}/ -name statistics.yaml | \
 						xargs grep 'xml/${LANGPAIR}.xml.gz' | cut -f4 -d:)))
 ALL_ALG_DONE   := $(patsubst ${STORAGE_BASE}%.xml.gz,done/%.done,${ALL_ALG_URLS})
-ALL_LINKS_DONE := $(patsubst ${STORAGE_BASE}%/xml/,done/%/${LANGPAIR3}.done,$(dir ${ALL_ALG_URLS}))
 
 
 ## alignment databases
@@ -179,14 +178,7 @@ aligndb:
 
 
 .PHONY: linkdb
-linkdb:
-	@mkdir -p $(dir ${LOCKFILE_DIR}/${LINK_DB}.lock)
-	@( ${FILELOCK} 9 || exit 1; \
-	  mkdir -p $(dir ${LINK_DB}); \
-	  $(call retrieve,${LINK_DB}); \
-	  ${MAKE} ${LINK_DB}; \
-	) 9> ${LOCKFILE_DIR}/${LINK_DB}.lock
-
+linkdb: ${LINK_DB}
 
 
 ######################################
@@ -367,6 +359,7 @@ opus.db: $(filter-out bitexts.db opus.db %.ids.db %.fts5.db $(wildcard *-*.db),$
 ## create a full-text search database from the sentence DB
 ## NEW: check rowid's if the fts-DB exists and only update with new rows
 ##      otherwise, create from scratch in the tmpdir and copy back
+## ---> still needs to be tested
 
 ${LANGUAGE_FTS_DB}: %.fts5.db: %.db
 	$(call retrieve,$@)
@@ -409,12 +402,9 @@ TMP_DB_FILES := $(sort ${TMP_ALIGN_DB} ${TMP_LINK_DB} ${TMP_LANGUAGE_IDX_DB} ${T
 
 .INTERMEDIATE: ${TMP_DB_FILES}
 
-
-## TODO: add filelocking here!
-
 ${TMP_DB_FILES}:
 	@mkdir -p $(dir $@)
-	( ${FILELOCK} 9 || exit 1; \
+	@( ${FILELOCK} 9 || exit 1; \
 	  $(call retrieve,$(patsubst ${INDEX_TMPDIR}/%,%,$@)); \
 	  if [ -s $(patsubst ${INDEX_TMPDIR}/%,%,$@) ]; then \
 	    echo "copying $(patsubst ${INDEX_TMPDIR}/%,%,$@) to $@"; \
@@ -425,7 +415,6 @@ ${TMP_DB_FILES}:
 ##---------------------------------------
 ## sqlite database of all alignments
 ##---------------------------------------
-
 
 ${ALIGN_DB}: ${TMP_ALIGN_DB} ${ALL_ALG_DONE}
 	@( ${FILELOCK} 9 || exit 1; \
@@ -468,7 +457,7 @@ ${ALL_ALG_DONE}: ${TMP_ALIGN_DB}
 	       | sqlite3 $<; \
 	     fi \
 	   fi \
-	) 2> $<.lock
+	) 9> $<.lock
 	@mkdir -p $(dir $@)
 	@touch $@
 
@@ -500,40 +489,25 @@ update_algdb =	echo "create $1";mkdir -p $(dir $1); echo "${CREATE_ALGDB}" | ${S
 ##  --> maps internal sentence IDs to internal link IDs
 ##--------------------------------------------------------------------------------
 
-${LINK_DB}: ${TMP_LINK_DB} ${ALL_LINKS_DONE}
-	@echo "update link DB $@"
-	@mkdir -p $(dir ${LINK_DB})
-	@for p in `echo "select DISTINCT srclang,trglang from corpora" | sqlite3 -separator "-" ${ALIGN_DB}`; do \
-	  echo "update link DB $@: process $$p"; \
-	  ${MAKE} LANGPAIR=$$p update-linkdb; \
-	done
-	@if [ -s ${TMP_LINK_DB} ]; then \
-	  echo "update link DB $@: sync back";\
-	  ${FILELOCK} ${TMP_LINK_DB}.lock rsync ${TMP_LINK_DB} $@; \
-	fi
-	@if [ `echo "select corpusID from corpora limit 1" | sqlite3 $@ | wc -l` -eq 0 ]; then \
-	  echo "update link DB $@: no corpus in $@ - remove the database"; \
-	  rm -f $@; \
-	fi
+## NEW: just update the whole DB without specifying selected corpus releases
+##      --> simplifies things a lot and is also quick enough
+##      --> no need for additional done flags
 
-.PHONY: update-linkdb
-update-linkdb: ${ALL_LINKS_DONE}
-
-${ALL_LINKS_DONE}: ${ALIGN_DB} ${TMP_LINK_DB} ${TMP_ALIGN_DB} ${TMP_SRCLANG_IDX_DB} ${TMP_TRGLANG_IDX_DB}
-	@echo "update link DB ${LINK_DB}: making $@"
-	@mkdir -p $(dir ${TMP_LINK_DB})
+${LINK_DB}: ${ALIGN_DB}
+	@mkdir -p $(dir ${LOCKFILE_DIR}/${LINK_DB}.lock)
 	@( ${FILELOCK} 9 || exit 1; \
+	   mkdir -p $(dir ${LINK_DB}); \
+	   $(call retrieve,${LINK_DB}); \
+	   ${MAKE} ${TMP_LINK_DB} ${TMP_ALIGN_DB} ${TMP_SRCLANG_IDX_DB} ${TMP_TRGLANG_IDX_DB}; \
 	   ${ALG2LINKS} -l ${TMP_LINK_DB} \
 			-a ${TMP_ALIGN_DB} \
 			-s ${TMP_SRCLANG_IDX_DB} \
-			-t ${TMP_TRGLANG_IDX_DB} \
-			-c $(word 2,$(subst /, ,$@)) \
-			-v $(word 3,$(subst /, ,$@)) \
-			-s3 ${SRCLANG3} \
-			-t3 ${TRGLANG3}; \
-	) 9> ${TMP_LINK_DB}.lock
-	@mkdir -p $(dir $@)
-	@touch $@
+			-t ${TMP_TRGLANG_IDX_DB}; \
+	   if [ -s ${TMP_LINK_DB} ]; then \
+	     echo "update link DB $@: sync back";\
+	     rsync ${TMP_LINK_DB} $@; \
+	   fi; \
+	) 9> ${LOCKFILE_DIR}/${LINK_DB}.lock
 
 
 ##--------------------------------------------------------------------------------
@@ -608,7 +582,6 @@ check-all-linkdb-jobs: ${CHECK_ALL_LINK_DB_JOBS}
 	@if [ `echo "select corpusID from corpora limit 1" | sqlite3 ${@:.check-empty-local=} | wc -l` -eq 0 ]; then \
 	  echo "no corpus in $< - remove the database"; \
 	  rm -f ${@:.check-empty-local=}; \
-	  find done -maxdepth 4 -name '${LANGPAIR3}.done' -delete; \
 	fi
 
 %.db.check-empty-linkdb:
