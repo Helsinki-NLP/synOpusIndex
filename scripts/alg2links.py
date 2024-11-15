@@ -174,6 +174,12 @@ def insert_corpus(data):
                                   AND srclang='{srclang}' AND trglang='{trglang}'""")
     linksDBcon.commit()
 
+def delete_corpus(corpusID):
+    global linksDBcon, linksDBcur
+    linksDBcur.execute(f"DELETE FROM corpora WHERE corpusID='{corpusID}'")
+    linksDBcur.execute(f"DELETE FROM corpus_range WHERE corpusID='{corpusID}'")
+    linksDBcon.commit()
+
 
 def insert_bitext(data):
     global linksDBcon, linksDBcur
@@ -211,7 +217,7 @@ def copy_links(corpus,version,srclang,trglang):
     fromDocID = 0
     toDocID = 0
     count = 0
-
+    countCorpusLinks = 0
 
     for bitext in bitextDBcur.execute(f"SELECT rowid,* FROM bitexts WHERE {matchCorpus} AND {matchDocLangs}"):
     
@@ -289,9 +295,15 @@ def copy_links(corpus,version,srclang,trglang):
         else:
             delete_bitext(bitextID)
 
+        countCorpusLinks += countBitextLinks
+        
+
     # final insert if necessary (should not be necessary)
     insert_links()
-    insert_corpus_range(corpusID,corpus,version,srclang,trglang)
+    if countCorpusLinks:
+        insert_corpus_range(corpusID,corpus,version,srclang,trglang)
+    else:
+        delete_corpus(corpusID)
 
 
 

@@ -24,6 +24,7 @@ parser = argparse.ArgumentParser(prog='opus_sentid_index',
 parser.add_argument('-c', '--corpus', help='Corpus name', required=True)
 parser.add_argument('-r', '--release', help='Release version', required=True)
 parser.add_argument('-l', '--language', help='Language', required=True)
+parser.add_argument('-sb', '--sentence-boundaries', help='add sentence boundaries', action='store_true', default=False)
 parser.add_argument('-v', '--verbose', help='verbose output', action='store_true', default=False)
 parser.add_argument('-64', '--base64', help='base64 encoding', action='store_true', default=False)
 parser.add_argument('-j', '--json', help='print JSON lines', action='store_true', default=False)
@@ -36,6 +37,7 @@ verbose = args.verbose;
 base64_encode = args.base64;
 json_encode = args.json;
 skip_sentdocs = args.skip_outside_paragraph_documents
+add_sent_boundaries = args.sentence_boundaries
 
 corpus    = args.corpus
 release   = args.release
@@ -54,12 +56,15 @@ lzip = zipfile.ZipFile(data_file)
 
 
 def start_element(name, attrs):
-    global sents, sentStr, inSent, inPar, sentCount, docCount
+    global sents, sentStr, inSent, inPar, sentCount, docCount, add_sent_boundaries
               
     if name == 's':
         inSent = True
         sentCount += 1
         sentStr = ''
+        if add_sent_boundaries:
+            sentStr=f"<s id='{attrs['id']}'>"
+            # sentStr=f"<s>"
         if not sentCount % 5000:
             sys.stderr.write('.')
             if not sentCount % 100000:
@@ -75,10 +80,12 @@ def start_element(name, attrs):
 
 def end_element(name):
     global sents, pars, sentStr, inSent, inPar
-    global corpus, skip_sentdocs
+    global corpus, skip_sentdocs, add_sent_boundaries
         
     if name == 's':
         inSent = True
+        if add_sent_boundaries:
+            sentStr+="</s>"
         if sentStr.strip():
             sents.append(sentStr.strip())
             sentStr = ''

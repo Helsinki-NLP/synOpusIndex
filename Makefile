@@ -149,8 +149,8 @@ all-mono:
 all-links:
 	@$(call retrieve,${ALIGN_DB})
 	@$(call retrieve,${LINK_DB})
-	${MAKE} aligndb-local
-	${MAKE} linkdb-local
+	${MAKE} aligndb
+	${MAKE} linkdb
 
 
 .PHONY: all-langpairs
@@ -169,32 +169,6 @@ aligndb: ${ALIGN_DB}
 linkdb: ${LINK_DB}
 
 
-## run alignment extraction in temporary file locations
-## --> much faster on fast local disks
-## TODO: can we avoid syncing to temp if no update is needed?
-
-TMP_ALIGN_DB := ${INDEX_TMPDIR}/${ALIGN_DB}
-TMP_LINK_DB  := ${INDEX_TMPDIR}/${LINK_DB}
-
-.PHONY: aligndb-local
-aligndb-local:
-	@$(call lockfile,${ALIGN_DB})
-	@mkdir -p $(dir ${TMP_ALIGN_DB})
-	@if [ -s ${ALIGN_DB} ]; then rsync ${ALIGN_DB} ${TMP_ALIGN_DB}; fi
-	${MAKE} ALIGN_DB=${TMP_ALIGN_DB} aligndb
-	@if [ -s ${TMP_ALIGN_DB} ]; then mv -f ${TMP_ALIGN_DB} ${ALIGN_DB}; fi
-	@$(call unlockfile,${ALIGN_DB})
-
-.PHONY: linkdb-local
-linkdb-local:
-	@mkdir -p $(dir ${LINK_DB}) $(dir ${TMP_LINK_DB})
-	@$(call lockfile,${LINK_DB})
-	@if [ -s ${LINK_DB} ]; then rsync ${LINK_DB} ${TMP_LINK_DB}; fi
-	${MAKE} LINK_DB=${TMP_LINK_DB} linkdb
-	@if [ -s ${TMP_LINK_DB} ]; then mv -f ${TMP_LINK_DB} ${LINK_DB}; fi
-	@$(call unlockfile,${LINK_DB})
-
-
 ######################################
 # some teporary target to do specific jobs
 # - HPLT language pairs
@@ -206,15 +180,20 @@ HPLT_LANGS := ar bs ca et en eu fi ga gl hi hr is mk mt nn sq sr sw zh_hant
 HPLT_PAIRS := $(foreach s,${HPLT_LANGS},$(foreach t,${HPLT_LANGS},$s-$t))
 HPLT_ZH := $(foreach s,${HPLT_LANGS},$s-zh_hant)
 HPLT_EN := $(foreach s,${HPLT_LANGS},$s-en en-$s)
+HPLT_NO := $(sort $(foreach s,${HPLT_LANGS},$s-nb $s-nn $s-no nb-$s nn-$s no-$s))
 
 hplt-pairs:
-	make LANGPAIRS="${HPLT_PAIRS}" all-langpairs
+	${MAKE} LANGPAIRS="${HPLT_PAIRS}" all-langpairs
 
 hplt-zh:
-	make LANGPAIRS="${HPLT_ZH}" all-langpairs
+	${MAKE} LANGPAIRS="${HPLT_ZH}" all-langpairs
 
 hplt-en:
-	make LANGPAIRS="${HPLT_EN}" all-langpairs
+	${MAKE} LANGPAIRS="${HPLT_EN}" all-langpairs
+
+hplt-no:
+	${MAKE} LANGPAIRS="${HPLT_NO}" all-langpairs
+
 
 zh:
 	${MAKE} LANGPAIRS="en-zh en-zh_hant en-zh_cn en-zh_tw en_yue cmn-en" all-langpairs
@@ -275,14 +254,14 @@ upload-all:
 	find done -name '*.done' | xargs -n 500 git add
 	git add index.txt
 
-upload-all2:
+.PHONY: upload-all-linkdbs
+upload-all-linkdbs:
 	which a-put
 	-find linkdb -name '*.db' -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
 	rm -f index.txt
 	${MAKE} index.txt
 	find done -name '*.done' | xargs -n 500 git add
 	git add index.txt
-
 
 index.txt:
 	which a-get
@@ -401,18 +380,31 @@ ${LANGUAGE_FTS_DB}: %.fts5.db: %.db
 ## sqlite database of all alignments
 ##---------------------------------------
 
-## TODO: should we integrate the updates to the corpora and table to the ALG2SQLITE script?
-##       should we also move table creation commands to the script (are they there already)
+
+TMP_ALIGN_DB := ${INDEX_TMPDIR}/${ALIGN_DB}
+
+.INTERMEDIATE: ${TMP_ALIGN_DB}
 
 ${ALIGN_DB}: ${ALL_ALG_DONE}
+	@echo "updating $@ is done - now syncing back"
+	@if [ -s ${TMP_ALIGN_DB} ]; then rsync ${TMP_ALIGN_DB} ${ALIGN_DB}; fi
+	@$(call unlockfile,${ALIGN_DB})
 
-${ALL_ALG_DONE}:
-	@echo "processing $(@:.done=.xml.gz)"
-	@mkdir -p $(dir ${ALIGN_DB})
-	@$(call lockfile,${ALIGN_DB})
-	@$(call create_algdb,${ALIGN_DB})
-	@wget -qq -O - $(patsubst done/%.done,${STORAGE_BASE}%.xml.gz,$@) | gzip -cd \
-	| ${ALG2SQLITE} -d ${ALIGN_DB} -c $(word 2,$(subst /, ,$@)) -v $(word 3,$(subst /, ,$@))
+
+## TODO: should we integrate the updates to the corpora and table to the ALG2SQLITE script?
+##       should we also move table creation commands to the script (are they there already)
+## TODO: should we sync the ALIGN_DB file back before touching the done-flag?
+##       --> this takes extra time (esp. with bif DB files), but we would not loose the file if the job breaks
+##       --> can also lead to inconsistencies as the DB is not synced back eventhough the flag says "done"
+
+${ALL_ALG_DONE}: ${TMP_ALIGN_DB}
+	@echo "update ${ALIGN_DB}: processing $(@:.done=.xml.gz)"
+	@mkdir -p $(dir $<)
+	@$(call lockfile,$<)
+	@$(call create_algdb,$<)
+	@wget -qq -O - $(patsubst done/%.done,${STORAGE_BASE}%.xml.gz,$@) \
+	| gzip -cd \
+	| ${ALG2SQLITE} -d $< -c $(word 2,$(subst /, ,$@)) -v $(word 3,$(subst /, ,$@))
 	@( c=$(word 2,$(subst /, ,$@)); \
 	   v=$(word 3,$(subst /, ,$@)); \
 	   l=`grep 'latest_release:' ${OPUSRELEASE}/$$c/info.yaml | cut -f2 -d' ' | xargs`; \
@@ -421,19 +413,30 @@ ${ALL_ALG_DONE}:
 	      l=`grep '$(notdir $(@:.done=.xml.gz))' ${OPUSRELEASE}/$$c/index.txt | tail -1 | cut -f1 -d/`; \
 	   fi; \
 	   if [ "$$v" == "$$l" ]; then \
-	     echo "release $$v is the latest release for $$c"; \
+	     echo "update ${ALIGN_DB}: release $$v is the latest release for $$c/${SRCLANG}-${TRGLANG}"; \
 	     echo "UPDATE corpora SET latest=0 WHERE corpus='$$c' AND srclang='${SRCLANG}' AND trglang='${TRGLANG}'; \
-	           ${INSERT_INTO} corpora VALUES('$$c','$$v','${SRCLANG}','${TRGLANG}','${SRCLANG3}','${TRGLANG3}',1);" \
-	     | sqlite3 ${ALIGN_DB}; \
+	           ${INSERT_INTO} corpora VALUES('$$c','$$v','${SRCLANG}','${TRGLANG}','${SRCLANG3}','${TRGLANG3}',1); \
+	           UPDATE corpora SET latest=1 WHERE corpus='$$c' AND version='$$v' AND srclang='${SRCLANG}' AND trglang='${TRGLANG}'; " \
+	     | sqlite3 $<; \
 	   else \
-	     echo "release $$v is an older release for $$c"; \
-	     echo "${INSERT_INTO} corpora VALUES('$$c','$$v','${SRCLANG}','${TRGLANG}','${SRCLANG3}','${TRGLANG3}',0)" \
-	     | sqlite3 ${ALIGN_DB}; \
+	     echo "update ${ALIGN_DB}: release $$v is an older release for $$c/${SRCLANG}-${TRGLANG}"; \
+	     echo "${INSERT_INTO} corpora VALUES('$$c','$$v','${SRCLANG}','${TRGLANG}','${SRCLANG3}','${TRGLANG3}',0); \
+	           UPDATE corpora SET latest=0 WHERE corpus='$$c' AND version='$$v' AND srclang='${SRCLANG}' AND trglang='${TRGLANG}'; " \
+	     | sqlite3 $<; \
 	   fi )
-	@$(call unlockfile,${ALIGN_DB})
+	@$(call unlockfile,$<)
 	@mkdir -p $(dir $@)
 	@touch $@
 
+
+${TMP_ALIGN_DB}:
+	@mkdir -p $(dir ${ALIGN_DB})
+	@$(call lockfile,${ALIGN_DB})
+	@mkdir -p $(dir $@)
+	@if [ -s ${ALIGN_DB} ]; then \
+	  echo "update ${ALIGN_DB}: copying ${ALIGN_DB} to $@"; \
+	  rsync -av ${ALIGN_DB} $@; \
+	fi
 
 
 
@@ -463,32 +466,59 @@ update_algdb =	echo "create $1";mkdir -p $(dir $1); echo "${CREATE_ALGDB}" | ${S
 ##  --> maps internal sentence IDs to internal link IDs
 ##--------------------------------------------------------------------------------
 
-${LINK_DB}: ${ALL_LINKS_DONE}
+TMP_LINK_DB := ${INDEX_TMPDIR}/${LINK_DB}
 
-LINKDB_PREREQ_TMPDIR := ${INDEX_TMPDIR}/linkdbtmp
-TMP_ALIGNMENT_DB     := ${LINKDB_PREREQ_TMPDIR}/${ALIGN_DB}
-TMP_SRCLANG_IDX_DB   := ${LINKDB_PREREQ_TMPDIR}/${SRCLANG_IDX_DB}
-TMP_TRGLANG_IDX_DB   := ${LINKDB_PREREQ_TMPDIR}/${TRGLANG_IDX_DB}
-LINKDB_PREREQUISITES := ${TMP_ALIGNMENT_DB} ${TMP_SRCLANG_IDX_DB} ${TMP_TRGLANG_IDX_DB}
+.INTERMEDIATE: ${TMP_LINK_DB}
 
-.INTERMEDIATE: ${LINKDB_PREREQUISITES}
-${LINKDB_PREREQUISITES}: ${LINKDB_PREREQ_TMPDIR}/%: %
-	mkdir -p $(dir $@)
-	rsync -av $< $@
+${LINK_DB}: ${ALIGN_DB} ${SRCLANG_IDX_DB} ${TRGLANG_IDX_DB}
+	@echo "update link DB $@"
+	@mkdir -p $(dir ${LINK_DB}) $(dir ${TMP_LINK_DB})
+	@$(call lockfile,${LINK_DB})
+	@echo "update link DB $@: copy ${LINK_DB} to ${TMP_LINK_DB}"
+	@if [ -s ${LINK_DB} ]; then rsync ${LINK_DB} ${TMP_LINK_DB}; fi
+	@for p in `echo "select DISTINCT srclang,trglang from corpora" | sqlite3 -separator "-" $<`; do \
+	  echo "update link DB $@: process $$p"; \
+	  ${MAKE} LANGPAIR=$$p LINK_DB=${TMP_LINK_DB} update-linkdb; \
+	done
+	@if [ -s ${TMP_LINK_DB} ]; then echo "update link DB $@: sync back";rsync ${TMP_LINK_DB} ${LINK_DB}; fi
+	@if [ `echo "select corpusID from corpora limit 1" | sqlite3 $@ | wc -l` -eq 0 ]; then \
+	  echo "update link DB $@: no corpus in $@ - remove the database"; \
+	  rm -f $@; \
+	fi
+	@$(call unlockfile,${LINK_DB})
 
-${ALL_LINKS_DONE}: ${LINKDB_PREREQUISITES}
-	@echo "making $@"
+
+LINKDB_TMP_DIR            := ${INDEX_TMPDIR}/tmplinkdb
+LINKDB_TMP_ALIGNMENT_DB   := ${LINKDB_TMP_DIR}/${ALIGN_DB}
+LINKDB_TMP_SRCLANG_IDX_DB := ${LINKDB_TMP_DIR}/${SRCLANG_IDX_DB}
+LINKDB_TMP_TRGLANG_IDX_DB := ${LINKDB_TMP_DIR}/${TRGLANG_IDX_DB}
+LINKDB_TMP_PREREQ         := ${TMP_ALIGNMENT_DB} ${TMP_SRCLANG_IDX_DB} ${TMP_TRGLANG_IDX_DB}
+
+.INTERMEDIATE: ${LINKDB_TMP_PREREQ}
+
+${LINKDB_TMP_PREREQ}:
+	@mkdir -p $(dir $@)
+	@if [ -s $(patsubst ${LINKDB_TMP_DIR}/%,%,$@) ]; then \
+	   rsync ${LINKDB_TMP_DIR}/%,%,$@) $@; \
+	fi
+
+.PHONY: update-linkdb
+update-linkdb: ${ALL_LINKS_DONE}
+
+${ALL_LINKS_DONE}: ${ALIGN_DB} ${LINKDB_TMP_PREREQ}
+	@echo "update link DB ${LINK_DB}: making $@"
 	@mkdir -p $(dir ${LINK_DB})
 	@$(call lockfile,${LINK_DB})
-	${ALG2LINKS} 	-l ${LINK_DB} \
-			-a ${TMP_ALIGNMENT_DB} \
-			-s ${TMP_SRCLANG_IDX_DB} \
-			-t ${TMP_TRGLANG_IDX_DB} \
+	@${ALG2LINKS} 	-l ${LINK_DB} \
+			-a ${LINKDB_TMP_ALIGNMENT_DB} \
+			-s ${LINKDB_TMP_SRCLANG_IDX_DB} \
+			-t ${LINKDB_TMP_TRGLANG_IDX_DB} \
 			-c $(word 2,$(subst /, ,$@)) \
 			-v $(word 3,$(subst /, ,$@)) \
 			-s3 ${SRCLANG3} \
 			-t3 ${TRGLANG3}
 	@$(call unlockfile,${LINK_DB})
+	@mkdir -p $(dir $@)
 	@touch $@
 
 
@@ -526,25 +556,75 @@ bitexts.db: ${LANGPAIR_DBS}
 ## (this can happen if, for example, the sentence index DB is not complete or other issues)
 
 ALL_LINK_DBS        := $(wildcard linkdb/*-*.db)
-CHECK_EMPTY_BITEXTS := $(patsubst %.db,%.check-empty-bitexts.db,$(ALL_LINK_DBS))
-CHECK_EMPTY_CORPORA := $(patsubst %.db,%.check-empty-corpora.db,$(ALL_LINK_DBS))
-CHECK_CORPORA_TABLE := $(patsubst %.db,%.check-corpora-table.db,$(ALL_LINK_DBS))
+CHECK_ALL_LINK_DBS  := $(patsubst %,%.check-empty-local,$(ALL_LINK_DBS))
+
+CHECK_EMPTY_LINKDB  := ${LINK_DB}.check-empty-linkdb
+CHECK_EMPTY_BITEXTS := ${LINK_DB}.check-empty-bitexts
+CHECK_EMPTY_LINKS   := ${LINK_DB}.check-empty-links
+CHECK_EMPTY_CORPORA := ${LINK_DB}.check-empty-corpora
+CHECK_CORPORA_TABLE := ${LINK_DB}.check-corpora-table
 
 
-.PHONY: check-empty-bitexts check-empty-corpora check-corpora-table
+.PHONY: check-empty-linkdb check-empty-bitexts check-empty-links check-empty-corpora check-corpora-table
+check-empty-linkdb:  $(CHECK_EMPTY_LINKDB)
 check-empty-bitexts: $(CHECK_EMPTY_BITEXTS)
+check-empty-links:   $(CHECK_EMPTY_LINKS)
 check-empty-corpora: $(CHECK_EMPTY_CORPORA)
 check-corpora-table: $(CHECK_CORPORA_TABLE)
+
+
+
+check-all-linkdbs: ${CHECK_ALL_LINK_DBS}
+
+
+## make individual jobs, one per LINK_DB
+
+CHECK_ALL_LINK_DB_JOBS  := $(patsubst %,%.check-empty-localjob,$(ALL_LINK_DBS))
+check-all-linkdb-jobs: ${CHECK_ALL_LINK_DB_JOBS}
+
+%.db.check-empty-localjob:
+	${MAKE} HPC_DISK=600 $(@:-localjob=-local).submit
+
+
+
+%.db.check-empty-local:
+	@mkdir -p $(dir ${INDEX_TMPDIR}/${@:.check-empty-local=})
+	rsync ${@:.check-empty-local=} ${INDEX_TMPDIR}/${@:.check-empty-local=}
+	${MAKE} LINK_DB=${INDEX_TMPDIR}/${@:.check-empty-local=} check-empty-linkdb
+	@echo "VACUUM" | sqlite3 ${INDEX_TMPDIR}/${@:.check-empty-local=}
+	rsync ${INDEX_TMPDIR}/${@:.check-empty-local=} ${@:.check-empty-local=}
+	@if [ `echo "select corpusID from corpora limit 1" | sqlite3 ${@:.check-empty-local=} | wc -l` -eq 0 ]; then \
+	  echo "no corpus in $< - remove the database"; \
+	  rm -f ${@:.check-empty-local=}; \
+	  find done -maxdepth 4 -name '${LANGPAIR3}.done' -delete; \
+	fi
+
+%.db.check-empty-linkdb:
+	${MAKE} $(@:-linkdb=-bitexts)
+	${MAKE} $(@:-linkdb=-links)
+	${MAKE} $(@:-linkdb=-corpora)
+
+## check link database and remove emtpy bitexts from the bitext table (i.e. bitexts without links)
+
+%.check-empty-bitexts: %
+	@echo "look for empty bitexts in $<"
+	@for c in `echo "select bitextID from bitexts" | sqlite3 $<`; do \
+	  echo -n '.'; \
+	  if [ `echo "select rowid from links where bitextID=$$c limit 1" | sqlite3 $< | wc -l` -eq 0 ]; then \
+	    echo "no links in $< for bitext with ID $$c"; \
+	    echo "delete from bitexts where bitextID=$$c"      | sqlite3 $<; \
+	    echo "delete from bitext_range where bitextID=$$c" | sqlite3 $<; \
+	  fi \
+	done
 
 ## check link database and remove bitexts and corpora that do not have any non-empty link
 ## (this can happen if, for example, the sentence index DB is not complete or other issues)
 
-%.check-empty-bitexts.db: %.db
-	@echo "testing $<"
+%.check-empty-links: %
+	@echo "look for bitexts without non-empty links in $<"
 	@for c in `echo "select distinct bitextID from links where srcSentIDs='' or trgSentIDs=''" | sqlite3 $<`; do \
 	  echo "testing bitext $$c"; \
-	  if [ `echo "select rowid from links where bitextID=$$c and srcSentIDs<>'' limit 1" | sqlite3 $< | wc -l` -eq 0 ] || \
-	     [ `echo "select rowid from links where bitextID=$$c and trgSentIDs<>'' limit 1" | sqlite3 $< | wc -l` -eq 0 ]; then \
+	  if [ `echo "select rowid from links where bitextID=$$c and srcSentIDs<>'' and trgSentIDs<>'' limit 1" | sqlite3 $< | wc -l` -eq 0 ]; then \
 	    echo "no links in $< for bitext with ID $$c"; \
 	    echo "delete from links where bitextID=$$c"        | sqlite3 $<; \
 	    echo "delete from linkedsource where bitextID=$$c" | sqlite3 $<; \
@@ -553,9 +633,14 @@ check-corpora-table: $(CHECK_CORPORA_TABLE)
 	    echo "delete from bitext_range where bitextID=$$c" | sqlite3 $<; \
 	  fi \
 	done
-	${MAKE} $(<:.db=.check-empty-corpora.db)
 
-%.check-empty-corpora.db: %.db
+#	  if [ `echo "select rowid from links where bitextID=$$c and srcSentIDs<>'' limit 1" | sqlite3 $< | wc -l` -eq 0 ] || \
+#	     [ `echo "select rowid from links where bitextID=$$c and trgSentIDs<>'' limit 1" | sqlite3 $< | wc -l` -eq 0 ]; then \
+#...
+#	${MAKE} $(<:.db=.check-empty-corpora.db)
+
+%.check-empty-corpora: %
+	@echo "look for empty corpora in $<"
 	@for c in `echo "select corpusID,corpus,version,srclang,trglang from corpora" | sqlite3 $<`; do \
 	  I=`echo $$c | cut -f1 -d\|`; \
 	  C=`echo $$c | cut -f2 -d\|`; \
@@ -578,18 +663,12 @@ check-corpora-table: $(CHECK_CORPORA_TABLE)
 	    fi; \
 	  fi \
 	done
-	@echo "VACUUM" | sqlite3 $<
-	@if [ `echo "select corpusID from corpora limit 1" | sqlite3 $< | wc -l` -eq 0 ]; then \
-	  echo "no corpus in $< - remove the database"; \
-	  rm -f $<; \
-	  find done -maxdepth 4 -name '$(notdir $(<:.db=.done))' -delete; \
-	fi
 
 
 ## add corpora table that includes language info
 ## in case it does not exist
 
-%.check-corpora-table.db: %.db
+%.check-corpora-table: %
 	@if [ `echo "SELECT name FROM sqlite_master WHERE type='table' AND name='corpora'" | sqlite3 $< | wc -l` -eq 0 ]; then \
 	  echo "$< does not contain the necessary table corpora!"; \
 	  echo "${CREATE_TABLE} corpora (corpus TEXT,version TEXT,srclang TEXT,trglang TEXT,srclang3 TEXT,trglang3 TEXT,latest INTEGER)" | sqlite3 $<; \
@@ -731,17 +810,20 @@ ${INDEX_TMPDIR}/%.jsonl:
 .PHONY: opensub-docs
 opensub-docs:
 	${MAKE} CORPUS=OpenSubtitles VERSION=v2018 LANGUAGE=en corpus-docs
-	${MAKE} CORPUS=OpenSubtitles VERSION=v2018 LANGUAGE=en corpus-docs
 
 .PHONY: europarl-docs
 europarl-docs:
-	${MAKE} CORPUS=Europarl VERSION=v8 LANGUAGE=en corpus-docs
 	${MAKE} CORPUS=Europarl VERSION=v8 LANGUAGE=en corpus-docs
 
 .PHONY: unpc-docs
 unpc-docs:
 	${MAKE} CORPUS=UNPC VERSION=v1.0 LANGUAGE=en corpus-docs
-	${MAKE} CORPUS=UNPC VERSION=v1.0 LANGUAGE=en corpus-docs
+
+
+.PHONY: europarl-sentdocs
+europarl-sentdocs:
+	${MAKE} CORPUS=Europarl VERSION=v8 LANGUAGE=en Europarl_v8.en-sentences.jsonl.gz
+
 
 .PHONY: corpus-docs
 corpus-docs: ${CORPUS}_${VERSION}.${LANGUAGE}.jsonl.gz ${CORPUS}_${VERSION}.${LANGUAGE}.txt.gz
@@ -751,6 +833,9 @@ ${CORPUS}_${VERSION}.${LANGUAGE}.jsonl.gz:
 
 ${CORPUS}_${VERSION}.${LANGUAGE}.txt.gz:
 	${SCRIPTDIR}/opus_get_documents.py -c ${CORPUS} -r ${VERSION} -l ${LANGUAGE} | ${GZIP} -c > $@
+
+${CORPUS}_${VERSION}.${LANGUAGE}-sentences.jsonl.gz:
+	${SCRIPTDIR}/opus_get_documents.py -sb -c ${CORPUS} -r ${VERSION} -l ${LANGUAGE} -j | ${GZIP} -c > $@
 
 
 
@@ -797,6 +882,7 @@ ${ALL_MONO_DONE}: done/%.done: ${INDEX_TMPDIR}/%.dedup
 ifneq (${SKIP_FILE_RETRIEVAL},1)
 retrieve = if [ ! -e ${1} ]; then \
 	     if [ `grep '${1}' index.txt | wc -l` -gt 0 ]; then \
+	       echo "fetch ${1} from ${STORAGE_BASE}index"; \
 	       mkdir -p $(dir ${1}); \
 	       wget -qq -O ${1} ${STORAGE_BASE}index/${1}; \
 	     fi \
@@ -805,7 +891,8 @@ else
 retrieve = echo "downloading files is disabled (skip retrieving $1)"
 endif
 
-lockfile = ( while [ -e ${1}.lock ]; do \
+lockfile = ( echo "trying to lock ${1}"; \
+	     while [ -e ${1}.lock ]; do \
 	       echo "waiting for exclusive access to ${1}"; \
 	       sleep 10; \
 	       if [ -d $(dir ${1}) ]; then \
@@ -814,7 +901,8 @@ lockfile = ( while [ -e ${1}.lock ]; do \
 	         find . -maxdepth 1 -name $(notdir ${1}).lock -mtime +1 -delete; \
 	       fi; \
 	     done; \
+	     echo "locking ${1}"; \
 	     touch ${1}.lock; )
 
-unlockfile = rm -f ${1}.lock
+unlockfile = echo "unlocking ${1}" && rm -f ${1}.lock
 
