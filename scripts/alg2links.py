@@ -28,6 +28,7 @@ linkDB = args.links
 
 
 buffersize = 100000
+# buffersize = 10
 
 ##----------------------------------------------------------------
 ## connect to source and target language sentence index DBs

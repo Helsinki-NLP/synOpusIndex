@@ -1,0 +1,417 @@
+  8282112 ara-ara.db
+748511232 ara-cat.db
+3326791680 ara-est.db
+377040896 ara-eus.db
+ 47087616 ara-gle.db
+156471296 ara-glg.db
+1556201472 ara-hin.db
+455094272 ara-isl.db
+854089728 ara-mkd.db
+  5943296 ara-mlt.db
+2848313344 ara-nor.db
+1280258048 ara-sqi.db
+540024832 ara-swa.db
+ 66727936 ara-zho.db
+ 77697024 bitexts.db
+136060928 bre-eng.db
+ 95272960 bre.db
+ 77430784 bre.fts5.db
+ 48349184 bre.ids.db
+724553728 cat-est.db
+298586112 cat-eus.db
+1042939904 cat-fin.db
+ 53305344 cat-gle.db
+894058496 cat-glg.db
+1483153408 cat-hbs.db
+443412480 cat-hin.db
+263041024 cat-isl.db
+172507136 cat-mkd.db
+  5980160 cat-mlt.db
+960139264 cat-nor.db
+486805504 cat-sqi.db
+193617920 cat-swa.db
+ 16478208 cat-zho.db
+2221441024 ces-ukr.db
+3088703488 deu-ukr.db
+1463525376 eng-eus.db
+299917312 eng-fao.db
+4156964864 eng-gle.db
+3802972160 eng-glg.db
+5287157760 eng-isl.db
+5366095872 eng-lit.db
+4905426944 eng-mkd.db
+3422392320 eng-mlt.db
+4426063872 eng-swa.db
+331943936 est-eus.db
+231821312 est-gle.db
+188993536 est-glg.db
+637321216 est-hin.db
+791465984 est-isl.db
+969080832 est-mkd.db
+1256284160 est-mlt.db
+2931904512 est-nor.db
+999272448 est-sqi.db
+307249152 est-swa.db
+ 15650816 est-zho.db
+474877952 eus-fin.db
+ 45551616 eus-gle.db
+181764096 eus-glg.db
+617242624 eus-hbs.db
+136974336 eus-hin.db
+ 96804864 eus-isl.db
+159825920 eus-mkd.db
+  1658880 eus-mlt.db
+335519744 eus-nor.db
+207376384 eus-sqi.db
+ 41484288 eus-swa.db
+   811008 eus-zho.db
+3946762240 eus.db
+2902659072 eus.fts5.db
+1625407488 eus.ids.db
+178569216 fao.db
+138772480 fao.fts5.db
+ 35323904 fao.ids.db
+273219584 fin-gle.db
+223420416 fin-glg.db
+1002737664 fin-hin.db
+972627968 fin-isl.db
+1213927424 fin-mkd.db
+1215037440 fin-mlt.db
+  4366336 fin-sme.db
+1211346944 fin-sqi.db
+462684160 fin-swa.db
+1386749952 fin-ukr.db
+1945018368 fin-zho.db
+ 58761216 gle-glg.db
+247328768 gle-hbs.db
+ 57417728 gle-hin.db
+154222592 gle-isl.db
+ 56430592 gle-mkd.db
+127123456 gle-mlt.db
+225161216 gle-nor.db
+ 49917952 gle-sqi.db
+ 19288064 gle-swa.db
+   737280 gle-zho.db
+3383308288 gle.db
+4948348928 gle.fts5.db
+1403449344 gle.ids.db
+476950528 glg-hbs.db
+168161280 glg-hin.db
+113205248 glg-isl.db
+189747200 glg-mkd.db
+  3899392 glg-mlt.db
+247517184 glg-nor.db
+142868480 glg-sqi.db
+ 56688640 glg-swa.db
+  1261568 glg-zho.db
+1195384832 hbs-hin.db
+1540227072 hbs-isl.db
+2720391168 hbs-mkd.db
+373133312 hbs-mlt.db
+2810621952 hbs-sqi.db
+453050368 hbs-swa.db
+ 25452544 hbs-zho.db
+180629504 hin-isl.db
+291213312 hin-mkd.db
+  6234112 hin-mlt.db
+402350080 hin-nor.db
+307273728 hin-sqi.db
+330264576 hin-swa.db
+ 25944064 hin-zho.db
+296284160 isl-mkd.db
+ 80949248 isl-mlt.db
+1233899520 isl-nor.db
+243142656 isl-sqi.db
+122884096 isl-swa.db
+  5767168 isl-zho.db
+3634188288 isl.db
+2711707648 isl.fts5.db
+2325663744 isl.ids.db
+2122907648 linkdb/ara-cat.db
+1052848128 linkdb/ara-eus.db
+116445184 linkdb/ara-gle.db
+417988608 linkdb/ara-glg.db
+4440260608 linkdb/ara-hin.db
+1406906368 linkdb/ara-isl.db
+2665033728 linkdb/ara-mkd.db
+ 17825792 linkdb/ara-mlt.db
+3784212480 linkdb/ara-sqi.db
+1530716160 linkdb/ara-swa.db
+203153408 linkdb/ara-zho.db
+383021056 linkdb/bre-eng.db
+2100559872 linkdb/cat-est.db
+826396672 linkdb/cat-eus.db
+3032498176 linkdb/cat-fin.db
+143630336 linkdb/cat-gle.db
+2459889664 linkdb/cat-glg.db
+4434051072 linkdb/cat-hbs.db
+1275846656 linkdb/cat-hin.db
+802078720 linkdb/cat-isl.db
+516005888 linkdb/cat-mkd.db
+ 18227200 linkdb/cat-mlt.db
+4603273216 linkdb/cat-nor.db
+1371705344 linkdb/cat-sqi.db
+569823232 linkdb/cat-swa.db
+ 50860032 linkdb/cat-zho.db
+4265861120 linkdb/eng-eus.db
+824885248 linkdb/eng-fao.db
+921554944 linkdb/est-eus.db
+645427200 linkdb/est-gle.db
+517947392 linkdb/est-glg.db
+1829445632 linkdb/est-hin.db
+2400829440 linkdb/est-isl.db
+2905329664 linkdb/est-mkd.db
+3729432576 linkdb/est-mlt.db
+2969980928 linkdb/est-sqi.db
+920719360 linkdb/est-swa.db
+ 48087040 linkdb/est-zho.db
+1339883520 linkdb/eus-fin.db
+119001088 linkdb/eus-gle.db
+495955968 linkdb/eus-glg.db
+1786658816 linkdb/eus-hbs.db
+374251520 linkdb/eus-hin.db
+278732800 linkdb/eus-isl.db
+443424768 linkdb/eus-mkd.db
+  4771840 linkdb/eus-mlt.db
+974245888 linkdb/eus-nor.db
+579629056 linkdb/eus-sqi.db
+127438848 linkdb/eus-swa.db
+  2392064 linkdb/eus-zho.db
+761716736 linkdb/fin-gle.db
+623955968 linkdb/fin-glg.db
+2882822144 linkdb/fin-hin.db
+2881310720 linkdb/fin-isl.db
+3683217408 linkdb/fin-mkd.db
+3618664448 linkdb/fin-mlt.db
+ 11718656 linkdb/fin-sme.db
+3579228160 linkdb/fin-sqi.db
+1361608704 linkdb/fin-swa.db
+4008353792 linkdb/fin-ukr.db
+156717056 linkdb/gle-glg.db
+705966080 linkdb/gle-hbs.db
+153980928 linkdb/gle-hin.db
+442347520 linkdb/gle-isl.db
+150589440 linkdb/gle-mkd.db
+352657408 linkdb/gle-mlt.db
+668258304 linkdb/gle-nor.db
+135823360 linkdb/gle-sqi.db
+ 58920960 linkdb/gle-swa.db
+  2170880 linkdb/gle-zho.db
+1355841536 linkdb/glg-hbs.db
+463749120 linkdb/glg-hin.db
+326008832 linkdb/glg-isl.db
+525701120 linkdb/glg-mkd.db
+ 11837440 linkdb/glg-mlt.db
+702025728 linkdb/glg-nor.db
+401387520 linkdb/glg-sqi.db
+174014464 linkdb/glg-swa.db
+  3760128 linkdb/glg-zho.db
+3551092736 linkdb/hbs-hin.db
+4785299456 linkdb/hbs-isl.db
+1140588544 linkdb/hbs-mlt.db
+1398259712 linkdb/hbs-swa.db
+ 77926400 linkdb/hbs-zho.db
+543727616 linkdb/hin-isl.db
+850755584 linkdb/hin-mkd.db
+ 17289216 linkdb/hin-mlt.db
+1236250624 linkdb/hin-nor.db
+903409664 linkdb/hin-sqi.db
+976338944 linkdb/hin-swa.db
+ 78303232 linkdb/hin-zho.db
+914780160 linkdb/isl-mkd.db
+242946048 linkdb/isl-mlt.db
+3884863488 linkdb/isl-nor.db
+747171840 linkdb/isl-sqi.db
+400633856 linkdb/isl-swa.db
+ 17383424 linkdb/isl-zho.db
+ 13307904 linkdb/mkd-mlt.db
+2514317312 linkdb/mkd-nor.db
+2517999616 linkdb/mkd-sqi.db
+458539008 linkdb/mkd-swa.db
+  5615616 linkdb/mkd-zho.db
+383676416 linkdb/mlt-nor.db
+ 22462464 linkdb/mlt-sqi.db
+ 18931712 linkdb/mlt-swa.db
+  2850816 linkdb/mlt-zho.db
+219860992 linkdb/nor-nor.db
+ 23846912 linkdb/nor-sme.db
+3244707840 linkdb/nor-sqi.db
+614981632 linkdb/nor-swa.db
+ 11902976 linkdb/sme-swe.db
+349679616 linkdb/sqi-swa.db
+  6193152 linkdb/sqi-zho.db
+ 67715072 linkdb/swa-zho.db
+5254049792 linkdb/swe-ukr.db
+  4538368 mkd-mlt.db
+962682880 mkd-nor.db
+875782144 mkd-sqi.db
+144375808 mkd-swa.db
+  1888256 mkd-zho.db
+4606279680 mkd.fts5.db
+2292056064 mkd.ids.db
+117657600 mlt-nor.db
+  7663616 mlt-sqi.db
+  6402048 mlt-swa.db
+   970752 mlt-zho.db
+4961533952 mlt.fts5.db
+2870280192 mlt.ids.db
+ 76988416 nor-nor.db
+  8904704 nor-sme.db
+1048363008 nor-sqi.db
+175587328 nor-swa.db
+   143360 nor-zho.db
+  4435968 sme-swe.db
+  6291456 sme.db
+  4808704 sme.fts5.db
+  2048000 sme.ids.db
+3811147776 spa-ukr.db
+110178304 sqi-swa.db
+  2080768 sqi-zho.db
+4365246464 sqi.ids.db
+ 21549056 swa-zho.db
+2129264640 swa.ids.db
+1792303104 swe-ukr.db
+34597376000 ara-eng.db
+5518340096 ara-fin.db
+12840013824 ara-hbs.db
+79030505472 ara.db
+50405871616 ara.fts5.db
+26845622272 ara.ids.db
+10429132800 cat-eng.db
+35192504320 cat.db
+51521474560 cat.fts5.db
+15626907648 cat.ids.db
+60010614784 ces.db
+44117184512 ces.fts5.db
+52292919296 ces.ids.db
+182201053184 deu-eng.db
+14790344704 deu-fin.db
+22485889024 deu-swe.db
+245110640640 deu.db
+178246311936 deu.fts5.db
+161785282560 deu.ids.db
+17375252480 eng-est.db
+37614776320 eng-fin.db
+54640607232 eng-hbs.db
+12844560384 eng-hin.db
+10879164416 eng-lav.db
+27964928000 eng-nor.db
+17199607808 eng-por.db
+54835015680 eng-rus.db
+18802720768 eng-slv.db
+12306915328 eng-sqi.db
+40960 eng-ukr.db
+28295794688 eng-zho.db
+1005769723904 eng.db
+752424488960 eng.fts5.db
+625881817088 eng.ids.db
+6953209856 est-fin.db
+8814264320 est-hbs.db
+17098084352 est.db
+12306051072 est.fts5.db
+17123880960 est.ids.db
+13906374656 fin-hbs.db
+5921259520 fin-nor.db
+7885754368 fin-slv.db
+40960 fin-spa.db
+14745534464 fin-swe.db
+40202149888 fin.db
+57144942592 fin.fts5.db
+37299982336 fin.ids.db
+416037572608 fra.db
+304948154368 fra.fts5.db
+209190305792 fra.ids.db
+17251651584 glg.db
+13184118784 glg.fts5.db
+7371022336 glg.ids.db
+10459217920 hbs-hbs.db
+6723178496 hbs-nor.db
+51509350400 hbs.db
+37832773632 hbs.fts5.db
+46107443200 hbs.ids.db
+22979186688 heb.db
+15913209856 heb.fts5.db
+15194550272 heb.ids.db
+40200425472 hin.db
+25079525376 hin.fts5.db
+7904686080 hin.ids.db
+16574058496 lav.db
+11523428352 lav.fts5.db
+13388865536 lav.ids.db
+112127877120 linkdb/ara-eng.db
+10353700864 linkdb/ara-est.db
+17241493504 linkdb/ara-fin.db
+44532228096 linkdb/ara-hbs.db
+10651361280 linkdb/ara-nor.db
+31272767488 linkdb/cat-eng.db
+6490927104 linkdb/ces-ukr.db
+584531857408 linkdb/deu-eng.db
+43071201280 linkdb/deu-fin.db
+64228089856 linkdb/deu-swe.db
+8824315904 linkdb/deu-ukr.db
+51004469248 linkdb/eng-est.db
+121270697984 linkdb/eng-fin.db
+11688947712 linkdb/eng-gle.db
+10805555200 linkdb/eng-glg.db
+177894289408 linkdb/eng-hbs.db
+38231576576 linkdb/eng-hin.db
+15791362048 linkdb/eng-isl.db
+32042934272 linkdb/eng-lav.db
+15742328832 linkdb/eng-lit.db
+14460882944 linkdb/eng-mkd.db
+9915494400 linkdb/eng-mlt.db
+91533922304 linkdb/eng-nor.db
+21959335936 linkdb/eng-por.db
+54079655936 linkdb/eng-slv.db
+13698187264 linkdb/eng-swa.db
+81752526848 linkdb/eng-zho.db
+20454780928 linkdb/est-fin.db
+27153346560 linkdb/est-hbs.db
+9354141696 linkdb/est-nor.db
+43336105984 linkdb/fin-hbs.db
+18845786112 linkdb/fin-nor.db
+23255748608 linkdb/fin-slv.db
+42653126656 linkdb/fin-swe.db
+5759393792 linkdb/fin-zho.db
+32832274432 linkdb/hbs-hbs.db
+8397004800 linkdb/hbs-mkd.db
+23289905152 linkdb/hbs-nor.db
+8421920768 linkdb/hbs-sqi.db
+90112 linkdb/nor-zho.db
+10911518720 linkdb/spa-ukr.db
+19847897088 lit.db
+14043602944 lit.fts5.db
+15804125184 lit.ids.db
+7360364544 mkd.db
+7181959168 mlt.db
+29090402304 nor.db
+22183829504 nor.fts5.db
+19906473984 nor.ids.db
+146940096512 por.db
+108969947136 por.fts5.db
+78469976064 por.ids.db
+218677854208 rus.db
+134597091328 rus.fts5.db
+52098420736 rus.ids.db
+32806858752 slk.db
+23899070464 slk.fts5.db
+24965951488 slk.ids.db
+20608765952 slv.db
+15416365056 slv.fts5.db
+18140672000 slv.ids.db
+383210979328 spa.db
+281867919360 spa.fts5.db
+239762591744 spa.ids.db
+10966523904 sqi.db
+8224133120 sqi.fts5.db
+20868546560 swa.db
+24493318144 swa.fts5.db
+58873409536 swe.db
+44154613760 swe.fts5.db
+52022947840 swe.ids.db
+42009489408 ukr.db
+25646989312 ukr.fts5.db
+10822717440 ukr.ids.db
+57853251584 zho.db
+47453503488 zho.fts5.db
+20702715904 zho.ids.db

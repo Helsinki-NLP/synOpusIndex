@@ -151,11 +151,14 @@ all-mono:
 	) 9> ${LOCKFILE_DIR}/${LANGUAGE_SENT_DB}.lock
 	${MAKE} ${LANGUAGE_FTS_DB}
 
+
 .PHONY: all-links
 all-links:
 	${MAKE} aligndb
 	${MAKE} linkdb
-
+	@if [ -d ${TMPDIR}/index_tmp_${LANGPAIR} ]; then \
+	  find ${TMPDIR}/index_tmp_${LANGPAIR} -delete; \
+	fi
 
 
 .PHONY: all-langpairs
@@ -196,6 +199,9 @@ HPLT_NO := $(sort $(foreach s,${HPLT_LANGS},$s-nb $s-nn $s-no nb-$s nn-$s no-$s)
 
 hplt-pairs:
 	${MAKE} LANGPAIRS="${HPLT_PAIRS}" all-langpairs
+
+hplt-missing:
+	${MAKE} LANGPAIRS="ca-mk ca-mt en-nn en-sw" all-langpairs
 
 hplt-zh:
 	${MAKE} LANGPAIRS="${HPLT_ZH}" all-langpairs
@@ -241,13 +247,53 @@ dedup: ${LANGUAGE_DEDUP}
 STORAGE_FILES := ${LANGUAGE_SENT_DB} ${LANGUAGE_IDX_DB} ${LANGUAGE_FTS_DB} ${ALIGN_DB} ${LINK_DB}
 SWIFT_PARAMS  := --use-slo --segment-size 5G --changed --skip-identical
 
-## add this before swift command?
-#	${LOAD_STORAGE_ENV} && \
+
+## problem: files > 5G will not be properly uploaded (5368709120 bytes)
+## error message on stderr: Expecting value: line 1 column 1 (char 0)
+##
+## --> need to check file size or md5sum?
+##
+##   s3cmd info s3://OPUS-index/linkdb/eng-nor.db 2>/dev/null | head -3 | grep 'File size' | cut -f2 -d: | sed 's/^ *//'
+## compare with
+##   stat --printf="%s" linkdb/eng-nor.db
+
+
+
+## define a function that uploads files to allas
+## - regular files <=5G size are easy
+## - big files >5G: if the file exists and has a different size:
+##   --> delete the old one first and upload the new one
+## (Why? Because upload does not overwrite segmented files)
+
+upload_file = ( a=`stat --printf="%s\n" $2`; \
+		if [ $$a -gt 5368709120 ]; then \
+		  echo "check big file (>5G) $2"; \
+		  if [ `s3cmd ls s3://$1/$2 | wc -l` -ne 0 ]; then \
+	  	    b=`s3cmd info s3://$1/$2 2>/dev/null \
+		       | head -3 | grep 'File size' | cut -f2 -d: | sed 's/^ *//'`; \
+	  	    echo " local file size = $$a"; \
+	  	    echo "storage filesize = $$b"; \
+	  	    if [ "$$a" != "$$b" ]; then \
+	  	      echo "refresh $2"; \
+	  	      swift delete $1 $2; \
+	  	      swift upload $1 ${SWIFT_PARAMS} $2; \
+	  	    fi; \
+		  else \
+	  	    echo "upload $2"; \
+		    swift upload $1 ${SWIFT_PARAMS} $2; \
+		  fi \
+		else \
+		  echo "upload regular file (<=5G) $2"; \
+		  swift upload $1 ${SWIFT_PARAMS} $2; \
+		fi )
+
 
 .PHONY: upload
 upload:
 	which a-put
-	swift upload OPUS-index ${SWIFT_PARAMS} ${STORAGE_FILES}
+	for f in ${STORAGE_FILES}; do \
+	  $(call upload_file,OPUS-index,$$f); \
+	done
 	rm -f index.txt
 	${MAKE} index.txt
 	find done -name '${LANGUAGE}.done'  | xargs -n 500 git add
@@ -258,6 +304,39 @@ upload:
 
 .PHONY: upload-all
 upload-all:
+	which a-put
+	find . -name '*.db' -size -5120M -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
+	find . -name '*.gz' -size -5120M -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
+	@for f in `find . -type f -size +5120M -name '*.db' -printf "%P\n"`; do \
+	  $(call upload_file,OPUS-index,$$f); \
+	done
+	@for f in `find . -type f -size +5120M -name '*.gz' -printf "%P\n"`; do \
+	  $(call upload_file,OPUS-index,$$f); \
+	done
+	rm -f index.txt
+	${MAKE} index.txt
+	find done -name '*.done' | xargs -n 500 git add
+	git add index.txt
+
+
+
+## add this before swift command?
+#	${LOAD_STORAGE_ENV} && \
+
+.PHONY: upload-old
+upload-old:
+	which a-put
+	swift upload OPUS-index ${SWIFT_PARAMS} ${STORAGE_FILES}
+	rm -f index.txt
+	${MAKE} index.txt
+	find done -name '${LANGUAGE}.done'  | xargs -n 500 git add
+	find done -name '${LANGPAIR}.done'  | xargs -n 500 git add
+	find done -name '${LANGPAIR3}.done' | xargs -n 500 git add
+	git add index.txt
+
+
+.PHONY: upload-all-old
+upload-all-old:
 	which a-put
 	-swift upload OPUS-index ${SWIFT_PARAMS} *.db *.gz
 	-find linkdb -name '*.db' -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
@@ -279,10 +358,23 @@ index.txt:
 	which a-get
 	swift list OPUS-index | grep '\.db$$' > $@
 
+## index with file sizes
+## the problem is that rclone and swift do not correctly report the size of segmented data files
+## --> complicated workaround with s2cmd (which is very slow and that's why it's only used for
+##     some suspicously small files)
 
 index-filesize.txt:
 	which a-get
-	rclone ls allas:OPUS-index | grep  '\.db$$' >> $@
+	rclone ls allas:OPUS-index | grep  '\.db$$' > $@.tmp
+	for f in `egrep -v '^ *[0-9]{6}' $@.tmp | rev | cut -f1 -d' ' | rev`; do \
+	  echo "getting file size for $$f"; \
+	  s=`s3cmd info s3://OPUS-index/$$f 2>/dev/null \
+	     | head -3 | grep 'File size' | cut -f2 -d: | sed 's/^ *//'`; \
+	  echo "$$s $$f" >> $@.big; \
+	done
+	egrep '^ *[0-9]{6}' $@.tmp > $@
+	cat $@.big >> $@
+	rm -f $@.big $@.tmp
 
 
 
@@ -495,7 +587,7 @@ update_algdb =	echo "create $1";mkdir -p $(dir $1); echo "${CREATE_ALGDB}" | ${S
 
 ${LINK_DB}: ${ALIGN_DB}
 	@mkdir -p $(dir ${LOCKFILE_DIR}/${LINK_DB}.lock)
-	@( ${FILELOCK} 9 || exit 1; \
+	( ${FILELOCK} 9 || exit 1; \
 	   mkdir -p $(dir ${LINK_DB}); \
 	   $(call retrieve,${LINK_DB}); \
 	   ${MAKE} ${TMP_LINK_DB} ${TMP_ALIGN_DB} ${TMP_SRCLANG_IDX_DB} ${TMP_TRGLANG_IDX_DB}; \
@@ -572,11 +664,11 @@ check-all-linkdb-jobs: ${CHECK_ALL_LINK_DB_JOBS}
 	${MAKE} HPC_DISK=600 $(@:-localjob=-local).submit
 
 
-
 %.db.check-empty-local:
+	@$(call retrieve,${@:.check-empty-local=})
 	@mkdir -p $(dir ${INDEX_TMPDIR}/${@:.check-empty-local=})
 	rsync ${@:.check-empty-local=} ${INDEX_TMPDIR}/${@:.check-empty-local=}
-	${MAKE} LINK_DB=${INDEX_TMPDIR}/${@:.check-empty-local=} check-empty-linkdb
+	${MAKE} ${INDEX_TMPDIR}/${@:.check-empty-local=.check-empty-linkdb}
 	@echo "VACUUM" | sqlite3 ${INDEX_TMPDIR}/${@:.check-empty-local=}
 	rsync ${INDEX_TMPDIR}/${@:.check-empty-local=} ${@:.check-empty-local=}
 	@if [ `echo "select corpusID from corpora limit 1" | sqlite3 ${@:.check-empty-local=} | wc -l` -eq 0 ]; then \
@@ -589,54 +681,63 @@ check-all-linkdb-jobs: ${CHECK_ALL_LINK_DB_JOBS}
 	${MAKE} $(@:-linkdb=-links)
 	${MAKE} $(@:-linkdb=-corpora)
 
+
 ## check link database and remove emtpy bitexts from the bitext table (i.e. bitexts without links)
+##
+## TODO: delete directly with:
+## DELETE FROM bitexts WHERE bitextID NOT IN (SELECT DISTINCT bitextID FROM links)
+## DELETE FROM bitext_range WHERE bitextID NOT IN (SELECT DISTINCT bitextID FROM bitexts)
 
 %.check-empty-bitexts: %
 	@echo "look for empty bitexts in $<"
-	@for c in `echo "select bitextID from bitexts" | sqlite3 $<`; do \
-	  echo -n '.'; \
-	  if [ `echo "select rowid from links where bitextID=$$c limit 1" | sqlite3 $< | wc -l` -eq 0 ]; then \
-	    echo "no links in $< for bitext with ID $$c"; \
-	    echo "delete from bitexts where bitextID=$$c"      | sqlite3 $<; \
-	    echo "delete from bitext_range where bitextID=$$c" | sqlite3 $<; \
-	  fi \
+	@for c in `echo "SELECT bitextID FROM bitexts WHERE bitextID NOT IN \
+			(SELECT DISTINCT bitextID FROM links)" | sqlite3 $<`; do \
+	   echo "no links in $< for bitext with ID $$c"; \
+	   echo "delete from bitexts where bitextID=$$c"      | sqlite3 $<; \
+	   echo "delete from bitext_range where bitextID=$$c" | sqlite3 $<; \
 	done
 
 ## check link database and remove bitexts and corpora that do not have any non-empty link
 ## (this can happen if, for example, the sentence index DB is not complete or other issues)
+##
+## TODO: is there some faster way of doing this?
+##       maybe using not exists like in
+##       https://stackoverflow.com/questions/62455852/sqlite-how-to-select-records-from-one-table-that-are-not-in-another-table
 
 %.check-empty-links: %
 	@echo "look for bitexts without non-empty links in $<"
-	@for c in `echo "select distinct bitextID from links where srcSentIDs='' or trgSentIDs=''" | sqlite3 $<`; do \
-	  echo "testing bitext $$c"; \
-	  if [ `echo "select rowid from links where bitextID=$$c and srcSentIDs<>'' and trgSentIDs<>'' limit 1" | sqlite3 $< | wc -l` -eq 0 ]; then \
-	    echo "no links in $< for bitext with ID $$c"; \
-	    echo "delete from links where bitextID=$$c"        | sqlite3 $<; \
-	    echo "delete from linkedsource where bitextID=$$c" | sqlite3 $<; \
-	    echo "delete from linkedtarget where bitextID=$$c" | sqlite3 $<; \
-	    echo "delete from bitexts where bitextID=$$c"      | sqlite3 $<; \
-	    echo "delete from bitext_range where bitextID=$$c" | sqlite3 $<; \
-	  fi \
+	@for c in `echo "SELECT DISTINCT bitextID FROM links WHERE (srcSentIDs='' OR trgSentIDs='') \
+			AND bitextID NOT IN \
+			(SELECT DISTINCT bitextID FROM links WHERE srcSentIDs<>'' AND trgSentIDs<>'')" \
+		| sqlite3 $<`; do \
+	   echo "no links in $< for bitext with ID $$c"; \
+	   echo "DELETE FROM links WHERE bitextID=$$c"        | sqlite3 $<; \
+	   echo "DELETE FROM linkedsource WHERE bitextID=$$c" | sqlite3 $<; \
+	   echo "DELETE FROM linkedtarget WHERE bitextID=$$c" | sqlite3 $<; \
+	   echo "DELETE FROM bitexts WHERE bitextID=$$c"      | sqlite3 $<; \
+	   echo "DELETE FROM bitext_range WHERE bitextID=$$c" | sqlite3 $<; \
 	done
 
-#	  if [ `echo "select rowid from links where bitextID=$$c and srcSentIDs<>'' limit 1" | sqlite3 $< | wc -l` -eq 0 ] || \
-#	     [ `echo "select rowid from links where bitextID=$$c and trgSentIDs<>'' limit 1" | sqlite3 $< | wc -l` -eq 0 ]; then \
-#...
-#	${MAKE} $(<:.db=.check-empty-corpora.db)
+
+## check for corpora without any bitexts
+## and remove such empty corpora
 
 %.check-empty-corpora: %
 	@echo "look for empty corpora in $<"
-	@for c in `echo "select corpusID,corpus,version,srclang,trglang from corpora" | sqlite3 $<`; do \
+	@for c in `echo "SELECT corpusID,corpus,version,srclang,trglang FROM corpora" | sqlite3 $<`; do \
 	  I=`echo $$c | cut -f1 -d\|`; \
 	  C=`echo $$c | cut -f2 -d\|`; \
 	  V=`echo $$c | cut -f3 -d\|`; \
 	  S=`echo $$c | cut -f4 -d\|`; \
 	  T=`echo $$c | cut -f5 -d\|`; \
 	  echo "testing corpus $$C/$$V/$$S-$$T ($$I)"; \
-	  if [ `echo "select bitextID from bitexts where corpus='$$C' and version='$$V' and fromDoc like '$$S/%' and toDoc like '$$T/%'" | sqlite3 $< | wc -l` -eq 0 ]; then \
+	  if [ `echo "SELECT bitextID FROM bitexts WHERE \
+				corpus='$$C' AND version='$$V' AND \
+				fromDoc LIKE '$$S/%' AND toDoc LIKE '$$T/%' LIMIT 1" \
+		| sqlite3 $< | wc -l` -eq 0 ]; then \
 	    echo "no bitexts in $< for corpus $$C/$$V/$$S-$$T"; \
-	    echo "delete from corpora where corpusID=$$I"      | sqlite3 $<; \
-	    echo "delete from corpus_range where corpusID=$$I" | sqlite3 $<; \
+	    echo "DELETE FROM corpora WHERE corpusID=$$I"      | sqlite3 $<; \
+	    echo "DELETE FROM corpus_range WHERE corpusID=$$I" | sqlite3 $<; \
 	    if [ -d done/$$C ]; then \
 	      if [ -d done/$$C/$$V ]; then \
 	        if [ -e done/$$C/$$V/xml/$$S-$$T.done ]; then \
@@ -661,7 +762,7 @@ check-all-linkdb-jobs: ${CHECK_ALL_LINK_DB_JOBS}
 	  echo "${CREATE_UNIQUE_INDEX} idx_release ON corpora (corpus,version,srclang,trglang)" | sqlite3 $<; \
 	  S=$(firstword $(subst -, ,$(notdir $(<:.db=)))); \
 	  T=$(lastword $(subst -, ,$(notdir $(<:.db=)))); \
-	  P=`echo "select fromDoc,toDoc from bitexts" | sqlite3 -separator " " $< | sed 's/\/[^ ]* /-/' | cut -f1 -d/ | sort -u | xargs`; \
+	  P=`echo "SELECT fromDoc,toDoc FROM bitexts" | sqlite3 -separator " " $< | sed 's/\/[^ ]* /-/' | cut -f1 -d/ | sort -u | xargs`; \
 	  for p in $$P; do \
 	    s=`echo $$p | cut -f1 -d-`; \
 	    t=`echo $$p | cut -f2 -d-`; \
@@ -699,15 +800,19 @@ ${LANGUAGE_IDX_DB}: ${ALL_MONO_IDSDONE}
 ## separate makefile targets for source and target language
 ## if necessary (i.e. LANGUAGE is not set to either language)
 
-ifneq (${LANGUAGE},${SRCLANG})
+ifneq (${LANGUAGE3},${SRCLANG3})
 ${SRCLANG_IDX_DB}:
-	${MAKE} LANGUAGE=${SRCLANG} $@
+	${MAKE} LANGUAGE=${SRCLANG} LANGUAGE3=${SRCLANG3} $@
 endif
 
-ifneq (${LANGUAGE},${TRGLANG})
+ifneq (${LANGUAGE3},${TRGLANG3})
 ${TRGLANG_IDX_DB}:
-	${MAKE} LANGUAGE=${TRGLANG} $@
+	${MAKE} LANGUAGE=${TRGLANG} LANGUAGE3=${TRGLANG3} $@
 endif
+
+
+
+mono-ids: ${LANGUAGE_IDX_DB}
 
 
 ${ALL_MONO_IDSDONE}: ${INDEX_TMPDIR}/${LANGUAGE_IDX_DB} ${TMP_SENTENCE_DB}
@@ -823,6 +928,11 @@ ${CORPUS}_${VERSION}.${LANGUAGE}.txt.gz:
 ${CORPUS}_${VERSION}.${LANGUAGE}-sentences.jsonl.gz:
 	${SCRIPTDIR}/opus_get_documents.py -sb -c ${CORPUS} -r ${VERSION} -l ${LANGUAGE} -j | ${GZIP} -c > $@
 
+
+## English subtitle documents from en-ka bitext extracted into smaller chunks
+
+OpenSubtitles_v2018_en-ka_en.jsonl.gz:
+	${SCRIPTDIR}scripts/opus_get_srcdocs.py -c OpenSubtitles -r v2018 -l en-ka -j | ${GZIP} -c > $@
 
 
 ## unicode cleanup
