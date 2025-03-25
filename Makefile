@@ -55,8 +55,8 @@ LINKDB_LANGPAIR := ${SRCLANG}-${TRGLANG}
 
 # INDEX_TMPDIR := ${TMPDIR}/index_tmp_${LANGPAIR3}
 INDEX_TMPDIR := ${TMPDIR}/index_tmp_${LANGPAIR}
-OPUSRELEASE  := OPUS/corpus
-STORAGE_BASE := https://object.pouta.csc.fi/OPUS-
+OPUSRELEASE  := synOPUS/corpus
+STORAGE_BASE := https://object.pouta.csc.fi/synOPUS-
 
 
 ##------------------------
@@ -292,7 +292,7 @@ upload_file = ( a=`stat --printf="%s\n" $2`; \
 upload:
 	which a-put
 	for f in ${STORAGE_FILES}; do \
-	  $(call upload_file,OPUS-index,$$f); \
+	  $(call upload_file,synOPUS-index,$$f); \
 	done
 	rm -f index.txt
 	${MAKE} index.txt
@@ -305,13 +305,13 @@ upload:
 .PHONY: upload-all
 upload-all:
 	which a-put
-	find . -name '*.db' -size -5120M -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
-	find . -name '*.gz' -size -5120M -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
+	find . -name '*.db' -size -5120M -exec swift upload synOPUS-index ${SWIFT_PARAMS} {} \;
+	find . -name '*.gz' -size -5120M -exec swift upload synOPUS-index ${SWIFT_PARAMS} {} \;
 	@for f in `find . -type f -size +5120M -name '*.db' -printf "%P\n"`; do \
-	  $(call upload_file,OPUS-index,$$f); \
+	  $(call upload_file,synOPUS-index,$$f); \
 	done
 	@for f in `find . -type f -size +5120M -name '*.gz' -printf "%P\n"`; do \
-	  $(call upload_file,OPUS-index,$$f); \
+	  $(call upload_file,synOPUS-index,$$f); \
 	done
 	rm -f index.txt
 	${MAKE} index.txt
@@ -326,7 +326,7 @@ upload-all:
 .PHONY: upload-old
 upload-old:
 	which a-put
-	swift upload OPUS-index ${SWIFT_PARAMS} ${STORAGE_FILES}
+	swift upload synOPUS-index ${SWIFT_PARAMS} ${STORAGE_FILES}
 	rm -f index.txt
 	${MAKE} index.txt
 	find done -name '${LANGUAGE}.done'  | xargs -n 500 git add
@@ -338,8 +338,8 @@ upload-old:
 .PHONY: upload-all-old
 upload-all-old:
 	which a-put
-	-swift upload OPUS-index ${SWIFT_PARAMS} *.db *.gz
-	-find linkdb -name '*.db' -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
+	-swift upload synOPUS-index ${SWIFT_PARAMS} *.db *.gz
+	-find linkdb -name '*.db' -exec swift upload synOPUS-index ${SWIFT_PARAMS} {} \;
 	rm -f index.txt
 	${MAKE} index.txt
 	find done -name '*.done' | xargs -n 500 git add
@@ -348,7 +348,7 @@ upload-all-old:
 .PHONY: upload-all-linkdbs
 upload-all-linkdbs:
 	which a-put
-	-find linkdb -name '*.db' -exec swift upload OPUS-index ${SWIFT_PARAMS} {} \;
+	-find linkdb -name '*.db' -exec swift upload synOPUS-index ${SWIFT_PARAMS} {} \;
 	rm -f index.txt
 	${MAKE} index.txt
 	find done -name '*.done' | xargs -n 500 git add
@@ -356,7 +356,7 @@ upload-all-linkdbs:
 
 index.txt:
 	which a-get
-	swift list OPUS-index | grep '\.db$$' > $@
+	swift list synOPUS-index | grep '\.db$$' > $@
 
 ## index with file sizes
 ## the problem is that rclone and swift do not correctly report the size of segmented data files
@@ -365,10 +365,10 @@ index.txt:
 
 index-filesize.txt:
 	which a-get
-	rclone ls allas:OPUS-index | grep  '\.db$$' > $@.tmp
+	rclone ls allas:synOPUS-index | grep  '\.db$$' > $@.tmp
 	for f in `egrep -v '^ *[0-9]{6}' $@.tmp | rev | cut -f1 -d' ' | rev`; do \
 	  echo "getting file size for $$f"; \
-	  s=`s3cmd info s3://OPUS-index/$$f 2>/dev/null \
+	  s=`s3cmd info s3://synOPUS-index/$$f 2>/dev/null \
 	     | head -3 | grep 'File size' | cut -f2 -d: | sed 's/^ *//'`; \
 	  echo "$$s $$f" >> $@.big; \
 	done
