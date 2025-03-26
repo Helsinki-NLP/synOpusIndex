@@ -64,7 +64,7 @@ STORAGE_BASE := https://object.pouta.csc.fi/synOPUS-
 ##------------------------
 
 ALL_MONO_URLS      := $(sort $(patsubst %,https:%,$(shell find ${OPUSRELEASE}/ -name statistics.yaml | \
-							xargs grep 'mono/${LANGUAGE}.txt.gz' | cut -f4 -d:)))
+							xargs grep -H 'mono/${LANGUAGE}.txt.gz' | cut -f4 -d:)))
 ALL_MONO_DEDUP     := $(patsubst ${STORAGE_BASE}%.txt.gz,${INDEX_TMPDIR}/%.dedup,${ALL_MONO_URLS})
 ALL_MONO_DONE      := $(patsubst ${INDEX_TMPDIR}/%.dedup,done/%.done,${ALL_MONO_DEDUP})
 ALL_MONO_IDSDONE   := $(patsubst ${INDEX_TMPDIR}/%.dedup,done/%.ids.done,${ALL_MONO_DEDUP})
@@ -78,7 +78,7 @@ ALL_MONO_IDSDONE   := $(patsubst ${INDEX_TMPDIR}/%.dedup,done/%.ids.done,${ALL_M
 ## and flags indicating that a specific bitext is done
 
 ALL_ALG_URLS   := $(sort $(patsubst %,https:%,$(shell find ${OPUSRELEASE}/ -name statistics.yaml | \
-						xargs grep 'xml/${LANGPAIR}.xml.gz' | cut -f4 -d:)))
+						xargs grep -H 'xml/${LANGPAIR}.xml.gz' | cut -f4 -d:)))
 ALL_ALG_DONE   := $(patsubst ${STORAGE_BASE}%.xml.gz,done/%.done,${ALL_ALG_URLS})
 
 
@@ -226,6 +226,13 @@ redo-done-non-english:
 redo-done-english:
 	${MAKE} LANGPAIRS="$(shell find done -mindepth 4 -name '*-*.done' | cut -f5 -d/ | cut -f1 -d. | sort -u | grep 'en')" all-langpairs
 
+
+
+ep-syn:
+	for l in en eu gd is ka mk so uk; do \
+	  ${MAKE} LANGUAGE=$$l all-mono; \
+	done
+	${MAKE} LANGPAIRS="en-eu en-gd en-is en-ka en-mk en-so en-uk" all-langpairs
 
 
 ######################################
@@ -426,7 +433,7 @@ ${LANGUAGE_SENT_DB}:
 	${MAKE} ${LANGUAGE_DEDUP}
 	mkdir -p ${INDEX_TMPDIR}
 	if [ -e $@ ]; then rsync $@ ${INDEX_TMPDIR}/$@; fi
-	${GZIP} -cd < $< | ${SCRIPTDIR}sent2sqlite.py ${INDEX_TMPDIR}/$@
+	${GZIP} -cd < ${LANGUAGE_DEDUP} | ${SCRIPTDIR}sent2sqlite.py ${INDEX_TMPDIR}/$@
 	mv -f ${INDEX_TMPDIR}/$@ $@
 	echo "PRAGMA journal_mode=WAL" | sqlite3 $@
 
@@ -468,7 +475,7 @@ ${LANGUAGE_FTS_DB}: %.fts5.db: %.db
 	  fi; \
 	else \
 	  ( ${FILELOCK} 9 || exit 1; \
-	    mkdir -p $(dir ${INDEX_TMPDIR}/$@); $(dir ${LOCKFILE_DIR}/$@.lock); \
+	    mkdir -p $(dir ${INDEX_TMPDIR}/$@) $(dir ${LOCKFILE_DIR}/$@.lock); \
 	    echo "CREATE VIRTUAL TABLE IF NOT EXISTS sentences USING FTS5(sentence)" \
 	    | sqlite3 ${INDEX_TMPDIR}/$@; \
 	    echo "ATTACH DATABASE '$<' as org; \

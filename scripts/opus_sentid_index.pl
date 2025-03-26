@@ -15,7 +15,7 @@ my $corpus = $opt_c   || die "need to specify a valid corpus name";
 my $release = $opt_r  || die "need to specify a valid corpus release (version)";
 my $language = $opt_l || die "need to specify a valid language ID";
 
-my $storage_url_base = 'https://object.pouta.csc.fi/OPUS-';
+my $storage_url_base = 'https://object.pouta.csc.fi/synOPUS-';
 
 my $file = shift(@ARGV);
 my $sent2id = MCDB_File->TIEHASH($database) or die "cannot tie $database ($!)\n";

@@ -15,7 +15,7 @@ from xml.parsers.expat import ParserCreate, ExpatError, errors
 
 
 
-storage_url_base = 'https://object.pouta.csc.fi/OPUS-'
+storage_url_base = 'https://object.pouta.csc.fi/synOPUS-'
 
 
 parser = argparse.ArgumentParser(prog='opus_sentid_index',
